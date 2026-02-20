@@ -27,13 +27,13 @@ def models(
     ),
     limit: int = typer.Option(20, "--limit", "-n", help="Max models to display"),
 ) -> None:
-    """List available models and pricing from OpenRouter."""
+    """List available models and pricing."""
     registry = ModelRegistry()
     try:
-        count = registry.load_from_openrouter()
-        console.print(f"[green]Loaded {count} models from OpenRouter[/green]\n")
+        registry.ensure_loaded()
+        console.print(f"[green]Loaded {len(registry.models)} models[/green]\n")
     except Exception as e:
-        console.print(f"[red]Failed to fetch models: {e}[/red]")
+        console.print(f"[red]Failed to load models: {e}[/red]")
         raise typer.Exit(1)
 
     from tokenwise.models import ModelTier
@@ -167,7 +167,7 @@ def plan(
 
 @app.command()
 def serve(
-    host: str = typer.Option("127.0.0.1", "--host", "-h", help="Host to bind to"),
+    host: str = typer.Option("127.0.0.1", "--host", help="Host to bind to"),
     port: int = typer.Option(8000, "--port", "-p", help="Port to bind to"),
     reload: bool = typer.Option(False, "--reload", help="Enable auto-reload for development"),
 ) -> None:

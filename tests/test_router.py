@@ -26,6 +26,21 @@ class TestDetectCapabilities:
         caps = _detect_capabilities("Write a haiku")
         assert caps == []
 
+    def test_no_false_positive_class(self):
+        """'class' in 'classical' should not trigger code detection."""
+        caps = _detect_capabilities("Write about classical music")
+        assert "code" not in caps
+
+    def test_no_false_positive_fix(self):
+        """'fix' in 'fixings' should not trigger code detection."""
+        caps = _detect_capabilities("What are the fixings for dinner")
+        assert "code" not in caps
+
+    def test_no_false_positive_reason(self):
+        """'reason' as substring in 'treason' should not trigger."""
+        caps = _detect_capabilities("Tell me about treason in history")
+        assert "reasoning" not in caps
+
 
 class TestEstimateComplexity:
     def test_simple(self):

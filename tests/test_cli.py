@@ -47,8 +47,8 @@ class TestCLI:
             tier=ModelTier.BUDGET,
         )
 
-        with patch("tokenwise.cli.Router") as MockRouter:
-            instance = MockRouter.return_value
+        with patch("tokenwise.cli.Router") as mock_router_cls:
+            instance = mock_router_cls.return_value
             instance.route.return_value = mock_model
 
             result = runner.invoke(app, ["route", "Write a haiku"])
@@ -68,8 +68,8 @@ class TestCLI:
             budget=1.0,
         )
 
-        with patch("tokenwise.cli.Planner") as MockPlanner:
-            instance = MockPlanner.return_value
+        with patch("tokenwise.cli.Planner") as mock_planner_cls:
+            instance = mock_planner_cls.return_value
             instance.plan.return_value = mock_plan
 
             result = runner.invoke(app, ["plan", "Test task"])

@@ -8,7 +8,6 @@ from tokenwise.config import reset_settings
 from tokenwise.models import ModelInfo, ModelTier
 from tokenwise.registry import ModelRegistry
 
-
 # Sample models for testing
 SAMPLE_MODELS = [
     ModelInfo(

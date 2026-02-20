@@ -5,7 +5,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class RoutingStrategy(str, Enum):
@@ -109,12 +109,18 @@ class ChatMessage(BaseModel):
 class ChatCompletionRequest(BaseModel):
     """OpenAI-compatible chat completion request."""
 
+    model_config = ConfigDict(extra="ignore")
+
     model: str = "auto"
     messages: list[ChatMessage]
     temperature: float | None = None
     max_tokens: int | None = None
     stream: bool = False
-    extra: dict[str, Any] = Field(default_factory=dict, alias="tokenwise")
+    tokenwise_opts: dict[str, Any] = Field(
+        default_factory=dict,
+        alias="tokenwise",
+        description="TokenWise-specific options (strategy, budget)",
+    )
 
 
 class ChatCompletionChoice(BaseModel):

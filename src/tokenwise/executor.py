@@ -75,7 +75,10 @@ class Executor:
                 result.final_output = sr.output
                 break
 
-        result.success = all(sr.success for sr in result.step_results)
+        # Fail if any step failed or if steps were skipped due to budget
+        all_steps_ran = len(result.step_results) == len(plan.steps)
+        all_succeeded = all(sr.success for sr in result.step_results)
+        result.success = all_steps_ran and all_succeeded
         return result
 
     def _build_prompt(
@@ -106,10 +109,12 @@ class Executor:
     ) -> StepResult:
         """Execute a single step by calling the LLM."""
         settings = get_settings()
+        api_key = settings.require_api_key()
 
-        headers: dict[str, str] = {"Content-Type": "application/json"}
-        if settings.openrouter_api_key:
-            headers["Authorization"] = f"Bearer {settings.openrouter_api_key}"
+        headers: dict[str, str] = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+        }
 
         try:
             resp = httpx.post(

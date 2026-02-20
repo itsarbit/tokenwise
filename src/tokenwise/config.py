@@ -9,6 +9,17 @@ from typing import Any
 import yaml
 from pydantic import BaseModel, Field
 
+
+class MissingAPIKeyError(Exception):
+    """Raised when an OpenRouter API key is required but not configured."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "OPENROUTER_API_KEY is not set. "
+            "Get one at https://openrouter.ai/keys and set it:\n"
+            "  export OPENROUTER_API_KEY='sk-or-...'"
+        )
+
 _DEFAULT_CONFIG_PATH = Path.home() / ".config" / "tokenwise" / "config.yaml"
 
 
@@ -32,6 +43,12 @@ class Settings(BaseModel):
     local_models_file: str | None = Field(
         default=None, description="Path to a local models YAML file for offline use"
     )
+
+    def require_api_key(self) -> str:
+        """Return the API key or raise MissingAPIKeyError."""
+        if not self.openrouter_api_key:
+            raise MissingAPIKeyError
+        return self.openrouter_api_key
 
 
 def load_settings(config_path: Path | None = None) -> Settings:

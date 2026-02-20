@@ -5,8 +5,6 @@ from __future__ import annotations
 import json
 from unittest.mock import patch
 
-import pytest
-
 from tokenwise.planner import Planner
 from tokenwise.registry import ModelRegistry
 
@@ -17,7 +15,8 @@ class TestPlanner:
         planner = Planner(registry=sample_registry)
 
         # Patch _decompose_task to simulate LLM failure (returns fallback)
-        with patch.object(planner, "_decompose_task", return_value=planner._fallback_decomposition("Test task")):
+        fallback = planner._fallback_decomposition("Test task")
+        with patch.object(planner, "_decompose_task", return_value=fallback):
             plan = planner.plan("Test task", budget=1.0)
 
         assert len(plan.steps) == 1
@@ -110,7 +109,11 @@ class TestPlanner:
     def test_parse_steps_json_with_markdown_fences(self, sample_registry: ModelRegistry):
         planner = Planner(registry=sample_registry)
 
-        content = '```json\n[{"description": "Step 1", "capability": "code", "estimated_input_tokens": 500, "estimated_output_tokens": 500}]\n```'
+        step_json = json.dumps([{
+            "description": "Step 1", "capability": "code",
+            "estimated_input_tokens": 500, "estimated_output_tokens": 500,
+        }])
+        content = f"```json\n{step_json}\n```"
         result = planner._parse_steps_json(content)
         assert len(result) == 1
 

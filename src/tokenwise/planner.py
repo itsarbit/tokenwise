@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Any
 
 import httpx
 
-from tokenwise.config import get_settings
+from tokenwise.config import MissingAPIKeyError, get_settings
 from tokenwise.models import ModelInfo, Plan, Step
 from tokenwise.registry import ModelRegistry
 from tokenwise.router import Router
@@ -97,11 +98,13 @@ class Planner:
     def _decompose_task(self, task: str) -> list[dict[str, Any]]:
         """Call the planner LLM to decompose a task into subtasks."""
         settings = get_settings()
+        api_key = settings.require_api_key()
         prompt = _DECOMPOSITION_PROMPT.format(task=task)
 
-        headers: dict[str, str] = {"Content-Type": "application/json"}
-        if settings.openrouter_api_key:
-            headers["Authorization"] = f"Bearer {settings.openrouter_api_key}"
+        headers: dict[str, str] = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+        }
 
         try:
             resp = httpx.post(
@@ -118,6 +121,8 @@ class Planner:
             resp.raise_for_status()
             content = resp.json()["choices"][0]["message"]["content"]
             return self._parse_steps_json(content)
+        except (MissingAPIKeyError, httpx.HTTPStatusError):
+            raise
         except Exception as e:
             logger.warning("LLM decomposition failed (%s), using fallback", e)
             return self._fallback_decomposition(task)
@@ -126,12 +131,9 @@ class Planner:
         """Parse the LLM's JSON response into step dicts."""
         # Strip markdown code fences if present
         content = content.strip()
-        if content.startswith("```"):
-            lines = content.split("\n")
-            content = "\n".join(lines[1:])
-            if content.endswith("```"):
-                content = content[:-3]
-            content = content.strip()
+        fence_match = re.search(r"```(?:\w+)?\n(.*?)```", content, re.DOTALL)
+        if fence_match:
+            content = fence_match.group(1).strip()
 
         try:
             data = json.loads(content)
@@ -213,23 +215,36 @@ class Planner:
         overage = plan.total_estimated_cost - plan.budget
 
         # Sort steps by cost descending — downgrade the most expensive first
-        step_costs = sorted(enumerate(plan.steps), key=lambda x: x[1].estimated_cost, reverse=True)
+        sorted_steps = sorted(
+            enumerate(plan.steps),
+            key=lambda x: x[1].estimated_cost,
+            reverse=True,
+        )
 
-        for idx, step in step_costs:
+        for idx, step in sorted_steps:
             if overage <= 0:
                 break
 
-            # Find a cheaper model for this step
-            cheapest = self.registry.cheapest()
+            # Detect capabilities the current model has
+            current = self.registry.get_model(step.model_id)
+            cap = None
+            if current and current.capabilities:
+                cap = current.capabilities[0]
+
+            # Find cheapest model that still has the required capability
+            cheapest = self.registry.cheapest(capability=cap)
+            if not cheapest:
+                cheapest = self.registry.cheapest()
             if cheapest and cheapest.id != step.model_id:
                 old_cost = step.estimated_cost
                 new_cost = cheapest.estimate_cost(
-                    step.estimated_input_tokens, step.estimated_output_tokens
+                    step.estimated_input_tokens,
+                    step.estimated_output_tokens,
                 )
                 if new_cost < old_cost:
                     plan.steps[idx].model_id = cheapest.id
                     plan.steps[idx].estimated_cost = new_cost
-                    overage -= (old_cost - new_cost)
+                    overage -= old_cost - new_cost
 
         plan.total_estimated_cost = sum(s.estimated_cost for s in plan.steps)
         return plan

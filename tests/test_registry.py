@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
-import json
-
 import pytest
 import respx
 from httpx import Response
 
 from tokenwise.models import ModelTier
-from tokenwise.registry import ModelRegistry, _infer_capabilities, _infer_tier, _parse_openrouter_model
+from tokenwise.registry import (
+    ModelRegistry,
+    _infer_capabilities,
+    _infer_tier,
+    _parse_openrouter_model,
+)
 
 
 class TestInferCapabilities:
