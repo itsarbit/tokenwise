@@ -111,22 +111,25 @@ class TestModelRegistry:
     @respx.mock
     def test_load_from_openrouter(self):
         respx.get("https://openrouter.ai/api/v1/models").mock(
-            return_value=Response(200, json={
-                "data": [
-                    {
-                        "id": "openai/gpt-4.1-mini",
-                        "name": "GPT-4.1 Mini",
-                        "pricing": {"prompt": "0.0000004", "completion": "0.0000016"},
-                        "context_length": 1000000,
-                    },
-                    {
-                        "id": "anthropic/claude-sonnet-4",
-                        "name": "Claude Sonnet 4",
-                        "pricing": {"prompt": "0.000003", "completion": "0.000015"},
-                        "context_length": 200000,
-                    },
-                ]
-            })
+            return_value=Response(
+                200,
+                json={
+                    "data": [
+                        {
+                            "id": "openai/gpt-4.1-mini",
+                            "name": "GPT-4.1 Mini",
+                            "pricing": {"prompt": "0.0000004", "completion": "0.0000016"},
+                            "context_length": 1000000,
+                        },
+                        {
+                            "id": "anthropic/claude-sonnet-4",
+                            "name": "Claude Sonnet 4",
+                            "pricing": {"prompt": "0.000003", "completion": "0.000015"},
+                            "context_length": 200000,
+                        },
+                    ]
+                },
+            )
         )
 
         registry = ModelRegistry()

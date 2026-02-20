@@ -20,6 +20,7 @@ class MissingAPIKeyError(Exception):
             "  export OPENROUTER_API_KEY='sk-or-...'"
         )
 
+
 _DEFAULT_CONFIG_PATH = Path.home() / ".config" / "tokenwise" / "config.yaml"
 
 

@@ -159,8 +159,14 @@ class Planner:
     def _assign_models(self, raw_steps: list[dict[str, Any]], budget: float) -> list[Step]:
         """Assign a model to each step based on capability and budget."""
         if not raw_steps:
-            raw_steps = [{"description": "Complete the task", "capability": "general",
-                          "estimated_input_tokens": 1000, "estimated_output_tokens": 1000}]
+            raw_steps = [
+                {
+                    "description": "Complete the task",
+                    "capability": "general",
+                    "estimated_input_tokens": 1000,
+                    "estimated_output_tokens": 1000,
+                }
+            ]
 
         steps: list[Step] = []
         remaining_budget = budget
@@ -188,15 +194,17 @@ class Planner:
             cost = model.estimate_cost(est_in, est_out)
             remaining_budget -= cost
 
-            steps.append(Step(
-                id=i + 1,
-                description=raw.get("description", f"Step {i + 1}"),
-                model_id=model.id,
-                estimated_input_tokens=est_in,
-                estimated_output_tokens=est_out,
-                estimated_cost=cost,
-                depends_on=[i] if i > 0 else [],
-            ))
+            steps.append(
+                Step(
+                    id=i + 1,
+                    description=raw.get("description", f"Step {i + 1}"),
+                    model_id=model.id,
+                    estimated_input_tokens=est_in,
+                    estimated_output_tokens=est_out,
+                    estimated_cost=cost,
+                    depends_on=[i] if i > 0 else [],
+                )
+            )
 
         return steps
 

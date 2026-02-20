@@ -11,13 +11,9 @@ from tokenwise.models import Plan, Step, StepResult
 from tokenwise.registry import ModelRegistry
 
 
-def _make_plan(
-    steps: list[Step], budget: float = 1.0, task: str = "test task"
-) -> Plan:
+def _make_plan(steps: list[Step], budget: float = 1.0, task: str = "test task") -> Plan:
     total = sum(s.estimated_cost for s in steps)
-    return Plan(
-        task=task, steps=steps, total_estimated_cost=total, budget=budget
-    )
+    return Plan(task=task, steps=steps, total_estimated_cost=total, budget=budget)
 
 
 def _mock_step_result(
@@ -64,10 +60,14 @@ class TestExecutor:
     def test_execute_multiple_steps(self, sample_registry: ModelRegistry):
         executor = Executor(registry=sample_registry)
         steps = [
-            Step(id=1, description="Step 1", model_id="openai/gpt-4.1-mini",
-                 estimated_cost=0.001),
-            Step(id=2, description="Step 2", model_id="openai/gpt-4.1-mini",
-                 estimated_cost=0.001, depends_on=[1]),
+            Step(id=1, description="Step 1", model_id="openai/gpt-4.1-mini", estimated_cost=0.001),
+            Step(
+                id=2,
+                description="Step 2",
+                model_id="openai/gpt-4.1-mini",
+                estimated_cost=0.001,
+                depends_on=[1],
+            ),
         ]
         plan = _make_plan(steps)
 
@@ -83,15 +83,11 @@ class TestExecutor:
         assert result.final_output == "second"
         assert result.total_cost == pytest.approx(0.002)
 
-    def test_budget_exhaustion_stops_execution(
-        self, sample_registry: ModelRegistry
-    ):
+    def test_budget_exhaustion_stops_execution(self, sample_registry: ModelRegistry):
         executor = Executor(registry=sample_registry)
         steps = [
-            Step(id=1, description="Expensive", model_id="openai/gpt-4.1-mini",
-                 estimated_cost=0.5),
-            Step(id=2, description="Skipped", model_id="openai/gpt-4.1-mini",
-                 estimated_cost=0.5),
+            Step(id=1, description="Expensive", model_id="openai/gpt-4.1-mini", estimated_cost=0.5),
+            Step(id=2, description="Skipped", model_id="openai/gpt-4.1-mini", estimated_cost=0.5),
         ]
         plan = _make_plan(steps, budget=0.001)
 
@@ -127,9 +123,7 @@ class TestExecutor:
         assert result.step_results[0].escalated
         assert result.final_output == "escalated result"
 
-    def test_escalation_skipped_when_no_budget(
-        self, sample_registry: ModelRegistry
-    ):
+    def test_escalation_skipped_when_no_budget(self, sample_registry: ModelRegistry):
         executor = Executor(registry=sample_registry)
         step = Step(
             id=1,
@@ -157,13 +151,9 @@ class TestExecutor:
         prompt = executor._build_prompt("Do X", "Custom template", {})
         assert prompt == "Custom template"
 
-    def test_build_prompt_with_prior_outputs(
-        self, sample_registry: ModelRegistry
-    ):
+    def test_build_prompt_with_prior_outputs(self, sample_registry: ModelRegistry):
         executor = Executor(registry=sample_registry)
-        prompt = executor._build_prompt(
-            "Do X", "", {1: "prior result"}
-        )
+        prompt = executor._build_prompt("Do X", "", {1: "prior result"})
         assert "Context from prior steps" in prompt
         assert "prior result" in prompt
         assert "Do X" in prompt
@@ -171,8 +161,7 @@ class TestExecutor:
     def test_budget_remaining(self, sample_registry: ModelRegistry):
         executor = Executor(registry=sample_registry)
         steps = [
-            Step(id=1, description="Step 1", model_id="openai/gpt-4.1-mini",
-                 estimated_cost=0.01),
+            Step(id=1, description="Step 1", model_id="openai/gpt-4.1-mini", estimated_cost=0.01),
         ]
         plan = _make_plan(steps, budget=1.0)
 

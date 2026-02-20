@@ -81,9 +81,7 @@ class Executor:
         result.success = all_steps_ran and all_succeeded
         return result
 
-    def _build_prompt(
-        self, description: str, template: str, prior_outputs: dict[int, str]
-    ) -> str:
+    def _build_prompt(self, description: str, template: str, prior_outputs: dict[int, str]) -> str:
         """Build the prompt for a step, including prior context."""
         if template:
             prompt = template
@@ -92,8 +90,7 @@ class Executor:
 
         if prior_outputs:
             context_parts = [
-                f"[Step {sid} output]: {out[:500]}"
-                for sid, out in prior_outputs.items()
+                f"[Step {sid} output]: {out[:500]}" for sid, out in prior_outputs.items()
             ]
             context = "\n".join(context_parts)
             prompt = f"Context from prior steps:\n{context}\n\nCurrent task: {prompt}"

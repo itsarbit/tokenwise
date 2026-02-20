@@ -29,10 +29,18 @@ class TestPlanner:
         planner = Planner(registry=sample_registry)
 
         raw_steps = [
-            {"description": "Write code", "capability": "code",
-             "estimated_input_tokens": 500, "estimated_output_tokens": 500},
-            {"description": "Review logic", "capability": "reasoning",
-             "estimated_input_tokens": 800, "estimated_output_tokens": 400},
+            {
+                "description": "Write code",
+                "capability": "code",
+                "estimated_input_tokens": 500,
+                "estimated_output_tokens": 500,
+            },
+            {
+                "description": "Review logic",
+                "capability": "reasoning",
+                "estimated_input_tokens": 800,
+                "estimated_output_tokens": 400,
+            },
         ]
         with patch.object(planner, "_decompose_task", return_value=raw_steps):
             plan = planner.plan("Build something", budget=5.0)
@@ -47,8 +55,12 @@ class TestPlanner:
         planner = Planner(registry=sample_registry)
 
         raw_steps = [
-            {"description": f"Step {i}", "capability": "general",
-             "estimated_input_tokens": 500, "estimated_output_tokens": 500}
+            {
+                "description": f"Step {i}",
+                "capability": "general",
+                "estimated_input_tokens": 500,
+                "estimated_output_tokens": 500,
+            }
             for i in range(5)
         ]
         with patch.object(planner, "_decompose_task", return_value=raw_steps):
@@ -65,12 +77,24 @@ class TestPlanner:
         planner = Planner(registry=sample_registry)
 
         raw_steps = [
-            {"description": "First", "capability": "general",
-             "estimated_input_tokens": 500, "estimated_output_tokens": 500},
-            {"description": "Second", "capability": "general",
-             "estimated_input_tokens": 500, "estimated_output_tokens": 500},
-            {"description": "Third", "capability": "general",
-             "estimated_input_tokens": 500, "estimated_output_tokens": 500},
+            {
+                "description": "First",
+                "capability": "general",
+                "estimated_input_tokens": 500,
+                "estimated_output_tokens": 500,
+            },
+            {
+                "description": "Second",
+                "capability": "general",
+                "estimated_input_tokens": 500,
+                "estimated_output_tokens": 500,
+            },
+            {
+                "description": "Third",
+                "capability": "general",
+                "estimated_input_tokens": 500,
+                "estimated_output_tokens": 500,
+            },
         ]
         with patch.object(planner, "_decompose_task", return_value=raw_steps):
             plan = planner.plan("Multi-step task", budget=5.0)
@@ -85,10 +109,16 @@ class TestPlanner:
 
         # Create an over-budget plan manually
         from tokenwise.models import Plan, Step
+
         steps = [
-            Step(id=1, description="Expensive step", model_id="anthropic/claude-opus-4",
-                 estimated_input_tokens=10000, estimated_output_tokens=10000,
-                 estimated_cost=0.90),
+            Step(
+                id=1,
+                description="Expensive step",
+                model_id="anthropic/claude-opus-4",
+                estimated_input_tokens=10000,
+                estimated_output_tokens=10000,
+                estimated_cost=0.90,
+            ),
         ]
         plan = Plan(task="Test", steps=steps, total_estimated_cost=0.90, budget=0.01)
 
@@ -98,10 +128,16 @@ class TestPlanner:
     def test_parse_steps_json(self, sample_registry: ModelRegistry):
         planner = Planner(registry=sample_registry)
 
-        json_str = json.dumps([
-            {"description": "Step 1", "capability": "code",
-             "estimated_input_tokens": 500, "estimated_output_tokens": 500}
-        ])
+        json_str = json.dumps(
+            [
+                {
+                    "description": "Step 1",
+                    "capability": "code",
+                    "estimated_input_tokens": 500,
+                    "estimated_output_tokens": 500,
+                }
+            ]
+        )
         result = planner._parse_steps_json(json_str)
         assert len(result) == 1
         assert result[0]["description"] == "Step 1"
@@ -109,10 +145,16 @@ class TestPlanner:
     def test_parse_steps_json_with_markdown_fences(self, sample_registry: ModelRegistry):
         planner = Planner(registry=sample_registry)
 
-        step_json = json.dumps([{
-            "description": "Step 1", "capability": "code",
-            "estimated_input_tokens": 500, "estimated_output_tokens": 500,
-        }])
+        step_json = json.dumps(
+            [
+                {
+                    "description": "Step 1",
+                    "capability": "code",
+                    "estimated_input_tokens": 500,
+                    "estimated_output_tokens": 500,
+                }
+            ]
+        )
         content = f"```json\n{step_json}\n```"
         result = planner._parse_steps_json(content)
         assert len(result) == 1

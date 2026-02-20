@@ -77,9 +77,7 @@ class Router:
 
         # Detect capabilities from query
         detected_caps = _detect_capabilities(query)
-        primary_cap = required_capability or (
-            detected_caps[0] if detected_caps else None
-        )
+        primary_cap = required_capability or (detected_caps[0] if detected_caps else None)
 
         complexity = _estimate_complexity(query)
 
@@ -89,12 +87,8 @@ class Router:
             return self._route_best_quality(primary_cap)
         elif strategy == RoutingStrategy.BUDGET_CONSTRAINED:
             if budget is None:
-                raise ValueError(
-                    "budget is required for budget_constrained strategy"
-                )
-            return self._route_budget_constrained(
-                primary_cap, budget, complexity
-            )
+                raise ValueError("budget is required for budget_constrained strategy")
+            return self._route_budget_constrained(primary_cap, budget, complexity)
         else:  # balanced
             return self._route_balanced(primary_cap, complexity)
 
@@ -105,9 +99,7 @@ class Router:
         return model
 
     def _route_best_quality(self, capability: str | None) -> ModelInfo:
-        models = self.registry.find_models(
-            capability=capability, tier=ModelTier.FLAGSHIP
-        )
+        models = self.registry.find_models(capability=capability, tier=ModelTier.FLAGSHIP)
         if not models:
             models = self.registry.find_models(capability=capability)
         if not models:
@@ -144,9 +136,7 @@ class Router:
 
         return affordable[0]
 
-    def _route_balanced(
-        self, capability: str | None, complexity: str
-    ) -> ModelInfo:
+    def _route_balanced(self, capability: str | None, complexity: str) -> ModelInfo:
         # Simple -> budget tier, moderate -> mid tier, complex -> flagship
         tier_map = {
             "simple": ModelTier.BUDGET,
@@ -155,9 +145,7 @@ class Router:
         }
         target_tier = tier_map.get(complexity, ModelTier.MID)
 
-        models = self.registry.find_models(
-            capability=capability, tier=target_tier
-        )
+        models = self.registry.find_models(capability=capability, tier=target_tier)
         if not models:
             models = self.registry.find_models(capability=capability)
         if not models:

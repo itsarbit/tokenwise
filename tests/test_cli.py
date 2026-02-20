@@ -61,8 +61,7 @@ class TestCLI:
         mock_plan = Plan(
             task="Test task",
             steps=[
-                Step(id=1, description="Do the thing", model_id="test/model",
-                     estimated_cost=0.001),
+                Step(id=1, description="Do the thing", model_id="test/model", estimated_cost=0.001),
             ],
             total_estimated_cost=0.001,
             budget=1.0,

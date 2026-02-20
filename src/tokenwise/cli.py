@@ -64,8 +64,7 @@ def models(
     console.print(table)
     if len(all_models) > limit:
         console.print(
-            f"\n[dim]Showing {limit} of {len(all_models)} models."
-            " Use --limit to see more.[/dim]"
+            f"\n[dim]Showing {limit} of {len(all_models)} models. Use --limit to see more.[/dim]"
         )
 
 
@@ -73,7 +72,9 @@ def models(
 def route(
     query: str = typer.Argument(help="The query to route"),
     strategy: str = typer.Option(
-        "balanced", "--strategy", "-s",
+        "balanced",
+        "--strategy",
+        "-s",
         help="Routing strategy: cheapest, best_quality, balanced, budget_constrained",
     ),
     budget: float | None = typer.Option(

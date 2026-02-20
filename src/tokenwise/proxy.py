@@ -86,12 +86,8 @@ async def chat_completions(
 
     # Determine which model to use
     if request.model == "auto" or request.model.startswith("tokenwise/"):
-        last_message = (
-            request.messages[-1].content or "" if request.messages else ""
-        )
-        strategy = request.tokenwise_opts.get(
-            "strategy", settings.default_strategy
-        )
+        last_message = request.messages[-1].content or "" if request.messages else ""
+        strategy = request.tokenwise_opts.get("strategy", settings.default_strategy)
         budget = request.tokenwise_opts.get("budget", settings.default_budget)
 
         try:
@@ -102,9 +98,7 @@ async def chat_completions(
             )
             model_id = model.id
         except ValueError as e:
-            raise HTTPException(
-                status_code=400, detail=f"Routing failed: {e}"
-            )
+            raise HTTPException(status_code=400, detail=f"Routing failed: {e}")
     else:
         model_id = request.model
 
@@ -115,9 +109,7 @@ async def chat_completions(
 
     payload: dict = {
         "model": model_id,
-        "messages": [
-            {"role": m.role, "content": m.content} for m in request.messages
-        ],
+        "messages": [{"role": m.role, "content": m.content} for m in request.messages],
     }
     if request.temperature is not None:
         payload["temperature"] = request.temperature
@@ -133,9 +125,7 @@ async def chat_completions(
         resp.raise_for_status()
         data = resp.json()
     except httpx.HTTPStatusError as e:
-        raise HTTPException(
-            status_code=e.response.status_code, detail=str(e)
-        )
+        raise HTTPException(status_code=e.response.status_code, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Upstream error: {e}")
 
