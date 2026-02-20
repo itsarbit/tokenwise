@@ -33,7 +33,14 @@ dependencies = [
 ]
 
 [dependency-groups]
-dev = ["pytest", "pytest-cov", "pytest-asyncio", "mypy", "ruff", "respx"]
+dev = [
+    "pytest",
+    "pytest-cov",
+    "pytest-asyncio",
+    "mypy",
+    "ruff",
+    "respx",
+]
 
 [project.scripts]
 tokenwise = "tokenwise.cli:app"

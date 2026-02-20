@@ -29,29 +29,29 @@ Existing LLM routers (RouteLLM, LLMRouter, Not Diamond) only do single-query rou
 ## How It Works
 
 ```
-┌──────────────────────────────────────────────────────┐
-│                      TokenWise                       │
-│                                                      │
-│  ┌────────────┐  ┌────────────┐  ┌────────────┐     │
-│  │   Router   │  │  Planner   │  │  Executor  │     │
-│  │            │  │            │  │            │     │
-│  │  Picks 1   │  │  Breaks    │  │  Runs the  │     │
-│  │  model per │  │  task into │  │  plan,     │     │
-│  │  query     │  │  steps +   │  │  tracks    │     │
-│  │            │  │  assigns   │  │  spend,    │     │
-│  │            │  │  models    │  │  retries   │     │
-│  └─────┬──────┘  └─────┬──────┘  └─────┬──────┘     │
-│        │               │               │            │
-│        └───────────────┼───────────────┘            │
-│                        ▼                            │
-│               ┌──────────────┐                      │
-│               │   Registry   │  ← metadata/pricing  │
-│               └──────┬───────┘                      │
-│                      ▼                              │
-│               ┌──────────────┐                      │
-│               │  OpenRouter  │  ← all LLM calls     │
-│               └──────────────┘                      │
-└──────────────────────────────────────────────────────┘
+┌───────────────────────────────────────────────────────┐
+│                       TokenWise                       │
+│                                                       │
+│  ┌────────────┐  ┌────────────┐  ┌────────────┐       │
+│  │   Router   │  │  Planner   │  │  Executor  │       │
+│  │            │  │            │  │            │       │
+│  │  Picks 1   │  │  Breaks    │  │  Runs the  │       │
+│  │  model per │  │  task into │  │  plan,     │       │
+│  │  query     │  │  steps +   │  │  tracks    │       │
+│  │            │  │  assigns   │  │  spend,    │       │
+│  │            │  │  models    │  │  retries   │       │
+│  └─────┬──────┘  └─────┬──────┘  └─────┬──────┘       │
+│        │               │               │              │
+│        └───────────────┼───────────────┘              │
+│                        ▼                              │
+│            ┌──────────────┐                           │
+│            │   Registry   │  ← metadata + pricing     │
+│            └──────┬───────┘                           │
+│                   ▼                                   │
+│            ┌──────────────┐                           │
+│            │  OpenRouter  │  ← all LLM calls          │
+│            └──────────────┘                           │
+└───────────────────────────────────────────────────────┘
 ```
 
 **Router** picks the best model for a single query using one of four strategies:
