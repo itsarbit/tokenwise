@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/logo.png" alt="TokenWise" width="360">
+  <img src="assets/logo.png" alt="TokenWise" width="540">
 </p>
 
 <h1 align="center">TokenWise</h1>
