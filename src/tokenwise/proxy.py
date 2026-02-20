@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import time
 import uuid
 from collections.abc import AsyncIterator
@@ -16,10 +17,18 @@ from tokenwise.models import (
     ChatCompletionRequest,
     ChatCompletionResponse,
     ChatMessage,
+    ModelTier,
     Usage,
 )
 from tokenwise.registry import ModelRegistry
 from tokenwise.router import Router
+
+logger = logging.getLogger(__name__)
+
+# HTTP status codes that indicate the model is unusable (should try another)
+_RETRYABLE_CODES = {400, 402, 403, 404, 422}
+
+_MAX_RETRIES = 3
 
 
 class _State:
@@ -28,6 +37,7 @@ class _State:
     http_client: httpx.AsyncClient
     registry: ModelRegistry
     router: Router
+    failed_models: set[str]
 
 
 state = _State()
@@ -39,6 +49,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     state.http_client = httpx.AsyncClient(timeout=120.0)
     state.registry = ModelRegistry()
     state.router = Router(state.registry)
+    state.failed_models = set()
     yield
     await state.http_client.aclose()
 
@@ -70,6 +81,35 @@ async def list_models() -> dict:
     }
 
 
+async def _forward_to_upstream(
+    model_id: str,
+    payload: dict,
+    headers: dict[str, str],
+) -> dict:
+    """Forward a request to the upstream LLM provider. Returns parsed JSON."""
+    settings = get_settings()
+    payload["model"] = model_id
+
+    resp = await state.http_client.post(
+        f"{settings.openrouter_base_url}/chat/completions",
+        headers=headers,
+        json=payload,
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
+def _get_fallback_models(exclude: set[str]) -> list[str]:
+    """Get fallback model IDs, preferring budget tier for broad accessibility."""
+    state.registry.ensure_loaded()
+    candidates = []
+    for tier in [ModelTier.BUDGET, ModelTier.MID]:
+        for m in state.registry.find_models(tier=tier):
+            if m.id not in exclude and m.input_price > 0:
+                candidates.append(m.id)
+    return candidates
+
+
 @app.post("/v1/chat/completions")
 async def chat_completions(
     request: ChatCompletionRequest,
@@ -85,7 +125,9 @@ async def chat_completions(
         )
 
     # Determine which model to use
-    if request.model == "auto" or request.model.startswith("tokenwise/"):
+    is_auto = request.model == "auto" or request.model.startswith("tokenwise/")
+
+    if is_auto:
         last_message = request.messages[-1].content or "" if request.messages else ""
         strategy = request.tokenwise_opts.get("strategy", settings.default_strategy)
         budget = request.tokenwise_opts.get("budget", settings.default_budget)
@@ -102,7 +144,7 @@ async def chat_completions(
     else:
         model_id = request.model
 
-    # Forward the request to OpenRouter
+    # Build upstream request
     headers: dict[str, str] = {"Content-Type": "application/json"}
     if settings.openrouter_api_key:
         headers["Authorization"] = f"Bearer {settings.openrouter_api_key}"
@@ -116,18 +158,38 @@ async def chat_completions(
     if request.max_tokens is not None:
         payload["max_tokens"] = request.max_tokens
 
-    try:
-        resp = await state.http_client.post(
-            f"{settings.openrouter_base_url}/chat/completions",
-            headers=headers,
-            json=payload,
+    # Try the primary model, then fallback if auto-routed
+    tried: set[str] = set(state.failed_models)
+    last_error: Exception | None = None
+
+    models_to_try = [model_id]
+    if is_auto:
+        models_to_try.extend(
+            mid for mid in _get_fallback_models(tried | {model_id})[:_MAX_RETRIES]
         )
-        resp.raise_for_status()
-        data = resp.json()
-    except httpx.HTTPStatusError as e:
-        raise HTTPException(status_code=e.response.status_code, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Upstream error: {e}")
+
+    for mid in models_to_try:
+        if mid in tried:
+            continue
+        tried.add(mid)
+        try:
+            data = await _forward_to_upstream(mid, payload, headers)
+            model_id = mid
+            break
+        except httpx.HTTPStatusError as e:
+            last_error = e
+            if e.response.status_code in _RETRYABLE_CODES:
+                state.failed_models.add(mid)
+                logger.info("Model %s returned %d, trying next", mid, e.response.status_code)
+                continue
+            raise HTTPException(status_code=e.response.status_code, detail=str(e))
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"Upstream error: {e}")
+    else:
+        # All models failed
+        if isinstance(last_error, httpx.HTTPStatusError):
+            raise HTTPException(status_code=last_error.response.status_code, detail=str(last_error))
+        raise HTTPException(status_code=502, detail="All models failed")
 
     # Parse response and return in OpenAI format
     choices = []

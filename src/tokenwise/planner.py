@@ -28,14 +28,14 @@ Return ONLY a JSON array of objects with these fields:
 
 Example:
 [
-  {"description": "Design the REST API endpoints",
+  {{"description": "Design the REST API endpoints",
    "capability": "code",
    "estimated_input_tokens": 500,
-   "estimated_output_tokens": 800},
-  {"description": "Write the database schema",
+   "estimated_output_tokens": 800}},
+  {{"description": "Write the database schema",
    "capability": "code",
    "estimated_input_tokens": 600,
-   "estimated_output_tokens": 600}
+   "estimated_output_tokens": 600}}
 ]
 
 Task: {task}

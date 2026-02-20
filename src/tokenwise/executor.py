@@ -7,10 +7,13 @@ import logging
 import httpx
 
 from tokenwise.config import get_settings
-from tokenwise.models import Plan, PlanResult, Step, StepResult
+from tokenwise.models import ModelInfo, Plan, PlanResult, Step, StepResult
 from tokenwise.registry import ModelRegistry
 
 logger = logging.getLogger(__name__)
+
+# HTTP status codes that indicate the model itself is unusable (not a transient error)
+_MODEL_UNUSABLE_CODES = {400, 402, 403, 404, 422}
 
 
 class BudgetExhaustedError(Exception):
@@ -22,6 +25,7 @@ class Executor:
 
     def __init__(self, registry: ModelRegistry | None = None) -> None:
         self.registry = registry or ModelRegistry()
+        self._failed_models: set[str] = set()
 
     def execute(self, plan: Plan) -> PlanResult:
         """Execute all steps in a plan sequentially.
@@ -34,6 +38,7 @@ class Executor:
         """
         result = PlanResult(task=plan.task, budget=plan.budget)
         prior_outputs: dict[int, str] = {}
+        self._failed_models.clear()
 
         for step in plan.steps:
             # Check budget before executing
@@ -50,14 +55,23 @@ class Executor:
             # Build prompt with context from prior steps
             prompt = self._build_prompt(step.description, step.prompt_template, prior_outputs)
 
-            step_result = self._execute_step(
-                step_id=step.id,
-                model_id=step.model_id,
-                prompt=prompt,
-                budget_remaining=remaining,
-            )
+            # If the planned model already failed in a prior step, skip straight to fallback
+            if step.model_id in self._failed_models:
+                step_result = StepResult(
+                    step_id=step.id, model_id=step.model_id, success=False,
+                    error="Skipped (model failed earlier)",
+                )
+            else:
+                step_result = self._execute_step(
+                    step_id=step.id,
+                    model_id=step.model_id,
+                    prompt=prompt,
+                    budget_remaining=remaining,
+                )
+                if not step_result.success and self._is_model_error(step_result.error):
+                    self._failed_models.add(step.model_id)
 
-            # If step failed and we have budget, try escalation
+            # If step failed and we have budget, try fallback models
             has_budget = result.total_cost + step_result.actual_cost < plan.budget
             if not step_result.success and has_budget:
                 escalated = self._escalate(step, prompt, remaining - step_result.actual_cost)
@@ -158,25 +172,61 @@ class Executor:
                 error=str(e),
             )
 
-    def _escalate(self, step: Step, prompt: str, budget_remaining: float) -> StepResult | None:
-        """Try re-running a failed step with a stronger model."""
+    def _is_model_error(self, error: str | None) -> bool:
+        """Check if an error indicates the model is unusable (not a transient issue)."""
+        if not error:
+            return False
+        return any(f"'{code}" in error or f"{code}" in error for code in _MODEL_UNUSABLE_CODES)
+
+    def _get_fallback_candidates(
+        self, exclude: set[str], budget_remaining: float, step: Step
+    ) -> list[ModelInfo]:
+        """Get fallback model candidates, preferring budget tier first."""
         from tokenwise.models import ModelTier
 
-        logger.info("Escalating step %d to a stronger model", step.id)
+        all_candidates: list[ModelInfo] = []
+        # Budget tier first — cheapest and most widely accessible
+        for tier in [ModelTier.BUDGET, ModelTier.MID, ModelTier.FLAGSHIP]:
+            all_candidates.extend(self.registry.find_models(tier=tier))
 
-        # Find a flagship model that fits the remaining budget
-        candidates = self.registry.find_models(tier=ModelTier.FLAGSHIP)
-        if not candidates:
-            candidates = self.registry.find_models(tier=ModelTier.MID)
-        if not candidates:
-            return None
+        # Filter: not excluded, not known-failed, affordable, has a nonzero price
+        results = []
+        for m in all_candidates:
+            if m.id in exclude:
+                continue
+            if m.input_price <= 0:
+                continue
+            est = m.estimate_cost(step.estimated_input_tokens, step.estimated_output_tokens)
+            if est <= budget_remaining:
+                results.append(m)
 
-        # Pick cheapest flagship
-        model = min(candidates, key=lambda m: m.input_price)
-        est_cost = model.estimate_cost(step.estimated_input_tokens, step.estimated_output_tokens)
-        if est_cost > budget_remaining:
-            return None
+        return results
 
-        result = self._execute_step(step.id, model.id, prompt, budget_remaining)
-        result.escalated = True
-        return result
+    def _escalate(self, step: Step, prompt: str, budget_remaining: float) -> StepResult | None:
+        """Try re-running a failed step with alternative models.
+
+        Tries multiple candidates across tiers (budget first, then mid, then
+        flagship) until one succeeds or all affordable options are exhausted.
+        Models that failed in prior steps are automatically skipped.
+        """
+        logger.info("Escalating step %d — trying alternative models", step.id)
+
+        tried = {step.model_id} | self._failed_models
+        candidates = self._get_fallback_candidates(tried, budget_remaining, step)
+
+        # Try up to 5 alternative models
+        for model in candidates[:5]:
+            tried.add(model.id)
+            result = self._execute_step(step.id, model.id, prompt, budget_remaining)
+            result.escalated = True
+            if result.success:
+                return result
+            # If this model is also unusable, remember it and continue
+            if self._is_model_error(result.error):
+                self._failed_models.add(model.id)
+                logger.info("Model %s unavailable, trying next", model.id)
+                continue
+            # Non-model error (timeout, etc.) — stop trying
+            break
+
+        return None
