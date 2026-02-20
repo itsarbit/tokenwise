@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/logo.png" alt="TokenWise" width="200">
+  <img src="assets/logo.png" alt="TokenWise" width="360">
 </p>
 
 <h1 align="center">TokenWise</h1>
@@ -29,29 +29,29 @@ Existing LLM routers (RouteLLM, LLMRouter, Not Diamond) only do single-query rou
 ## How It Works
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                        TokenWise                            │
-│                                                             │
-│  ┌──────────┐   ┌──────────┐   ┌──────────┐               │
-│  │  Router   │   │ Planner  │   │ Executor │               │
-│  │          │   │          │   │          │               │
-│  │ Picks 1  │   │ Breaks   │   │ Runs the │               │
-│  │ model per│   │ task into│   │ plan,    │               │
-│  │ query    │   │ steps +  │   │ tracks   │               │
-│  │          │   │ assigns  │   │ spend,   │               │
-│  │          │   │ models   │   │ retries  │               │
-│  └────┬─────┘   └────┬─────┘   └────┬─────┘               │
-│       │              │              │                      │
-│       └──────────────┼──────────────┘                      │
-│                      ▼                                     │
-│              ┌──────────────┐                               │
-│              │   Registry   │  ← model metadata + pricing  │
-│              └──────┬───────┘                               │
-│                     ▼                                      │
-│              ┌──────────────┐                               │
-│              │  OpenRouter  │  ← all LLM calls go here     │
-│              └──────────────┘                               │
-└─────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────┐
+│                      TokenWise                       │
+│                                                      │
+│  ┌────────────┐  ┌────────────┐  ┌────────────┐     │
+│  │   Router   │  │  Planner   │  │  Executor  │     │
+│  │            │  │            │  │            │     │
+│  │  Picks 1   │  │  Breaks    │  │  Runs the  │     │
+│  │  model per │  │  task into │  │  plan,     │     │
+│  │  query     │  │  steps +   │  │  tracks    │     │
+│  │            │  │  assigns   │  │  spend,    │     │
+│  │            │  │  models    │  │  retries   │     │
+│  └─────┬──────┘  └─────┬──────┘  └─────┬──────┘     │
+│        │               │               │            │
+│        └───────────────┼───────────────┘            │
+│                        ▼                            │
+│               ┌──────────────┐                      │
+│               │   Registry   │  ← metadata/pricing  │
+│               └──────┬───────┘                      │
+│                      ▼                              │
+│               ┌──────────────┐                      │
+│               │  OpenRouter  │  ← all LLM calls     │
+│               └──────────────┘                      │
+└──────────────────────────────────────────────────────┘
 ```
 
 **Router** picks the best model for a single query using one of four strategies:
