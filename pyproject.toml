@@ -32,6 +32,12 @@ dependencies = [
     "pyyaml>=6.0",
 ]
 
+[project.urls]
+Homepage = "https://github.com/itsarbit/tokenwise"
+Repository = "https://github.com/itsarbit/tokenwise"
+Issues = "https://github.com/itsarbit/tokenwise/issues"
+Changelog = "https://github.com/itsarbit/tokenwise/blob/master/CHANGELOG.md"
+
 [dependency-groups]
 dev = [
     "pytest",
