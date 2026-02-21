@@ -13,7 +13,7 @@
 
 <p align="center"><strong>Intelligent LLM Task Planner</strong> — decompose tasks, route to optimal models, enforce budgets.</p>
 
-Existing LLM routers (RouteLLM, LLMRouter, Not Diamond) only do single-query routing: pick one model per request. TokenWise goes further — it **plans**: decomposes complex tasks into subtasks, assigns the right model to each step based on cost/quality/capability, enforces a token budget, and retries with a stronger model on failure.
+Existing LLM routers (RouteLLM, LLMRouter, Not Diamond) only do single-query routing: pick one model per request. TokenWise goes further in two ways. First, its router uses a **two-stage pipeline** — it detects the scenario (what capabilities the query needs, how complex it is) before applying your cost/quality preference, so every route is context-aware. Second, it **plans**: decomposes complex tasks into subtasks, assigns the right model to each step based on cost/quality/capability, enforces a token budget, and retries with a stronger model on failure.
 
 > **Note:** TokenWise uses [OpenRouter](https://openrouter.ai) as the default model gateway for model discovery and routing. You can also use direct provider APIs (OpenAI, Anthropic, Google) by setting the corresponding API keys — when a direct key is available, requests for that provider bypass OpenRouter automatically.
 
@@ -36,11 +36,11 @@ Existing LLM routers (RouteLLM, LLMRouter, Not Diamond) only do single-query rou
 │  ┌────────────┐  ┌────────────┐  ┌────────────┐       │
 │  │   Router   │  │  Planner   │  │  Executor  │       │
 │  │            │  │            │  │            │       │
-│  │  Picks 1   │  │  Breaks    │  │  Runs the  │       │
-│  │  model per │  │  task into │  │  plan,     │       │
-│  │  query     │  │  steps +   │  │  tracks    │       │
-│  │            │  │  assigns   │  │  spend,    │       │
-│  │            │  │  models    │  │  retries   │       │
+│  │  1. Detect │  │  Breaks    │  │  Runs the  │       │
+│  │  scenario  │  │  task into │  │  plan,     │       │
+│  │  2. Route  │  │  steps +   │  │  tracks    │       │
+│  │  within    │  │  assigns   │  │  spend,    │       │
+│  │  budget    │  │  models    │  │  retries   │       │
 │  └─────┬──────┘  └─────┬──────┘  └─────┬──────┘       │
 │        │               │               │              │
 │        └───────────────┼───────────────┘              │
@@ -124,9 +124,9 @@ tokenwise serve --port 8000
 from tokenwise import Router, Planner
 from tokenwise.executor import Executor
 
-# Simple routing — picks the best model, returns ModelInfo
+# Simple routing — detects scenario, picks best model within budget
 router = Router()
-model = router.route("Explain quantum computing", strategy="balanced")
+model = router.route("Explain quantum computing", strategy="balanced", budget=0.10)
 print(f"Use model: {model.id} (${model.input_price}/M input tokens)")
 
 # Task planning with budget
@@ -210,7 +210,7 @@ src/tokenwise/
 ├── models.py          # Pydantic data models (ModelInfo, Plan, Step, etc.)
 ├── config.py          # Settings from env vars and config file
 ├── registry.py        # ModelRegistry — fetches/caches models from OpenRouter
-├── router.py          # Router — picks best model for a single query
+├── router.py          # Router — two-stage pipeline: scenario → strategy
 ├── planner.py         # Planner — decomposes tasks, assigns models per step
 ├── executor.py        # Executor — runs plans, tracks spend, escalates on failure
 ├── cli.py             # Typer CLI (models, route, plan, serve)
