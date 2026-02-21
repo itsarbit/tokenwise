@@ -14,10 +14,9 @@ class TestPlanner:
         """When LLM decomposition fails, fallback should produce a single-step plan."""
         planner = Planner(registry=sample_registry)
 
-        # Simulate LLM failure via _DecomposeResult with fallback source
         fallback_steps = planner._fallback_decomposition("Test task")
         decompose_result = _DecomposeResult(
-            steps=fallback_steps, source="fallback", error="LLM unavailable"
+            steps=fallback_steps, source="fallback", error="LLM unavailable", planner_cost=0.0
         )
         with patch.object(planner, "_decompose_task", return_value=decompose_result):
             plan = planner.plan("Test task", budget=1.0)
@@ -28,6 +27,7 @@ class TestPlanner:
         assert plan.is_within_budget()
         assert plan.decomposition_source == "fallback"
         assert plan.decomposition_error == "LLM unavailable"
+        assert plan.planner_cost == 0.0
 
     def test_plan_assigns_models(self, sample_registry: ModelRegistry):
         """Each step should get a valid model from the registry."""
@@ -47,7 +47,7 @@ class TestPlanner:
                 "estimated_output_tokens": 400,
             },
         ]
-        decompose_result = _DecomposeResult(steps=raw_steps, source="llm")
+        decompose_result = _DecomposeResult(steps=raw_steps, source="llm", planner_cost=0.0)
         with patch.object(planner, "_decompose_task", return_value=decompose_result):
             plan = planner.plan("Build something", budget=5.0)
 
@@ -71,18 +71,17 @@ class TestPlanner:
             }
             for i in range(5)
         ]
-        decompose_result = _DecomposeResult(steps=raw_steps, source="llm")
+        decompose_result = _DecomposeResult(steps=raw_steps, source="llm", planner_cost=0.0)
         with patch.object(planner, "_decompose_task", return_value=decompose_result):
             plan = planner.plan("Do many things", budget=0.01)
 
-        # With a tiny budget, the plan should use cheap models
         for step in plan.steps:
             model = sample_registry.get_model(step.model_id)
             assert model is not None
             assert model.input_price < 5.0
 
-    def test_plan_step_dependencies(self, sample_registry: ModelRegistry):
-        """Steps should have sequential dependencies."""
+    def test_plan_step_dependencies_sequential_fallback(self, sample_registry: ModelRegistry):
+        """Steps without depends_on should have sequential dependencies."""
         planner = Planner(registry=sample_registry)
 
         raw_steps = [
@@ -105,13 +104,74 @@ class TestPlanner:
                 "estimated_output_tokens": 500,
             },
         ]
-        decompose_result = _DecomposeResult(steps=raw_steps, source="llm")
+        decompose_result = _DecomposeResult(steps=raw_steps, source="llm", planner_cost=0.0)
         with patch.object(planner, "_decompose_task", return_value=decompose_result):
             plan = planner.plan("Multi-step task", budget=5.0)
 
         assert plan.steps[0].depends_on == []
         assert plan.steps[1].depends_on == [1]
         assert plan.steps[2].depends_on == [2]
+
+    def test_plan_step_dependencies_from_llm(self, sample_registry: ModelRegistry):
+        """Steps with explicit depends_on from LLM should be parsed correctly."""
+        planner = Planner(registry=sample_registry)
+
+        raw_steps = [
+            {
+                "description": "Design API",
+                "capability": "code",
+                "estimated_input_tokens": 500,
+                "estimated_output_tokens": 500,
+                "depends_on": [],
+            },
+            {
+                "description": "Design DB schema",
+                "capability": "code",
+                "estimated_input_tokens": 500,
+                "estimated_output_tokens": 500,
+                "depends_on": [],
+            },
+            {
+                "description": "Implement endpoints",
+                "capability": "code",
+                "estimated_input_tokens": 500,
+                "estimated_output_tokens": 500,
+                "depends_on": [0, 1],
+            },
+        ]
+        decompose_result = _DecomposeResult(steps=raw_steps, source="llm", planner_cost=0.0)
+        with patch.object(planner, "_decompose_task", return_value=decompose_result):
+            plan = planner.plan("Build API", budget=5.0)
+
+        # Step 1 and 2 are independent
+        assert plan.steps[0].depends_on == []
+        assert plan.steps[1].depends_on == []
+        # Step 3 depends on steps 1 and 2 (0-indexed [0,1] → 1-indexed [1,2])
+        assert plan.steps[2].depends_on == [1, 2]
+
+    def test_planner_cost_deducted_from_budget(self, sample_registry: ModelRegistry):
+        """Planner cost should be tracked and reduce effective budget."""
+        planner = Planner(registry=sample_registry)
+
+        raw_steps = [
+            {
+                "description": "Do work",
+                "capability": "general",
+                "estimated_input_tokens": 500,
+                "estimated_output_tokens": 500,
+            },
+        ]
+        decompose_result = _DecomposeResult(
+            steps=raw_steps,
+            source="llm",
+            planner_cost=0.005,
+            planner_input_tokens=200,
+            planner_output_tokens=100,
+        )
+        with patch.object(planner, "_decompose_task", return_value=decompose_result):
+            plan = planner.plan("Do work", budget=1.0)
+
+        assert plan.planner_cost == 0.005
 
     def test_optimize_for_budget(self, sample_registry: ModelRegistry):
         """_optimize_for_budget should downgrade expensive models."""

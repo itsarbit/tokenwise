@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -35,7 +35,9 @@ def _mock_step_result(
     )
 
 
-class TestExecutor:
+class TestExecutorSequential:
+    """Tests for the sequential execution path (_execute_sequential)."""
+
     def test_execute_single_step(self, sample_registry: ModelRegistry):
         executor = Executor(registry=sample_registry)
         step = Step(
@@ -51,7 +53,7 @@ class TestExecutor:
             "_execute_step",
             return_value=_mock_step_result(1),
         ):
-            result = executor.execute(plan)
+            result = executor._execute_sequential(plan)
 
         assert result.success
         assert len(result.step_results) == 1
@@ -76,7 +78,7 @@ class TestExecutor:
                 _mock_step_result(1, output="first"),
                 _mock_step_result(2, output="second"),
             ]
-            result = executor.execute(plan)
+            result = executor._execute_sequential(plan)
 
         assert result.success
         assert len(result.step_results) == 2
@@ -93,9 +95,8 @@ class TestExecutor:
 
         with patch.object(executor, "_execute_step") as mock_exec:
             mock_exec.return_value = _mock_step_result(1, cost=0.002)
-            result = executor.execute(plan)
+            result = executor._execute_sequential(plan)
 
-        # Only first step executed; second skipped due to budget
         assert len(result.step_results) == 1
         assert not result.success
 
@@ -111,7 +112,7 @@ class TestExecutor:
 
         with patch.object(executor, "_execute_step") as mock_exec:
             mock_exec.return_value = _mock_step_result(1, cost=0.002)
-            result = executor.execute(plan)
+            result = executor._execute_sequential(plan)
 
         assert len(result.step_results) == 1
         assert len(result.skipped_steps) == 2
@@ -137,7 +138,7 @@ class TestExecutor:
 
         with patch.object(executor, "_execute_step", return_value=failed):
             with patch.object(executor, "_escalate", return_value=escalated):
-                result = executor.execute(plan)
+                result = executor._execute_sequential(plan)
 
         assert result.success
         assert result.step_results[0].escalated
@@ -156,10 +157,13 @@ class TestExecutor:
         failed = _mock_step_result(1, success=False, cost=0.001)
 
         with patch.object(executor, "_execute_step", return_value=failed):
-            result = executor.execute(plan)
+            result = executor._execute_sequential(plan)
 
-        # Should not escalate since budget is exhausted
         assert not result.success
+
+
+class TestExecutorCommon:
+    """Tests for shared helper methods."""
 
     def test_build_prompt_no_prior(self, sample_registry: ModelRegistry):
         executor = Executor(registry=sample_registry)
@@ -178,54 +182,37 @@ class TestExecutor:
         assert "prior result" in prompt
         assert "Do X" in prompt
 
-    def test_budget_remaining(self, sample_registry: ModelRegistry):
-        executor = Executor(registry=sample_registry)
-        steps = [
-            Step(id=1, description="Step 1", model_id="openai/gpt-4.1-mini", estimated_cost=0.01),
-        ]
-        plan = _make_plan(steps, budget=1.0)
-
-        with patch.object(executor, "_execute_step") as mock_exec:
-            mock_exec.return_value = _mock_step_result(1, cost=0.005)
-            result = executor.execute(plan)
-
-        assert result.budget_remaining == pytest.approx(0.995)
-
     def test_fallback_candidates_escalate_upward(self, sample_registry: ModelRegistry):
         """Fallback for a BUDGET model should prioritize MID/FLAGSHIP tiers."""
         executor = Executor(registry=sample_registry)
         step = Step(
             id=1,
             description="Test",
-            model_id="openai/gpt-4.1-mini",  # BUDGET tier
+            model_id="openai/gpt-4.1-mini",
             estimated_cost=0.001,
         )
         candidates = executor._get_fallback_candidates(
             exclude={"openai/gpt-4.1-mini"}, budget_remaining=10.0, step=step
         )
-        # First candidates should be from stronger tiers
         assert len(candidates) > 0
         from tokenwise.models import ModelTier
 
         first = sample_registry.get_model(candidates[0].id)
         assert first is not None
-        # The first candidate should be FLAGSHIP or MID (stronger than BUDGET)
         assert first.tier in (ModelTier.FLAGSHIP, ModelTier.MID)
 
     def test_fallback_candidates_respect_capability(self, sample_registry: ModelRegistry):
         """Fallback candidates should match the failed model's capabilities."""
         executor = Executor(registry=sample_registry)
-        # openai/o3 has capabilities: code, reasoning, math — no "general"
         step = Step(
             id=1,
             description="Math problem",
-            model_id="openai/o3",  # FLAGSHIP, capabilities: code, reasoning, math
+            model_id="openai/o3",
             estimated_cost=0.001,
         )
         candidates = executor._get_fallback_candidates(
             exclude={"openai/o3"}, budget_remaining=100.0, step=step
         )
-        # All candidates should have at least the "code" capability (inferred from failed model)
         for m in candidates:
             assert "code" in m.capabilities
 
@@ -235,21 +222,19 @@ class TestExecutor:
         step = Step(
             id=1,
             description="Reasoning task",
-            model_id="openai/gpt-4.1-mini",  # BUDGET tier
+            model_id="openai/gpt-4.1-mini",
             estimated_cost=0.001,
             required_capabilities=["reasoning"],
         )
         candidates = executor._get_fallback_candidates(
             exclude={"openai/gpt-4.1-mini"}, budget_remaining=100.0, step=step
         )
-        # All candidates should have "reasoning" capability
         for m in candidates:
             assert "reasoning" in m.capabilities
 
     def test_is_model_error_uses_status_code(self, sample_registry: ModelRegistry):
         """_is_model_error checks http_status_code, not string matching."""
         executor = Executor(registry=sample_registry)
-        # 404 is a model-unusable code
         result_404 = StepResult(
             step_id=1,
             model_id="test/model",
@@ -259,7 +244,6 @@ class TestExecutor:
         )
         assert executor._is_model_error(result_404) is True
 
-        # 500 is transient, not model-unusable
         result_500 = StepResult(
             step_id=1,
             model_id="test/model",
@@ -269,7 +253,6 @@ class TestExecutor:
         )
         assert executor._is_model_error(result_500) is False
 
-        # No HTTP status code — not a model error
         result_none = StepResult(
             step_id=1,
             model_id="test/model",
@@ -278,8 +261,11 @@ class TestExecutor:
         )
         assert executor._is_model_error(result_none) is False
 
-    def test_ledger_populated_after_execution(self, sample_registry: ModelRegistry):
-        """Ledger should have entries after executing a plan."""
+
+class TestExecutorAsync:
+    """Tests for the async DAG-based execution path."""
+
+    async def test_aexecute_single_step(self, sample_registry: ModelRegistry):
         executor = Executor(registry=sample_registry)
         step = Step(
             id=1,
@@ -289,14 +275,178 @@ class TestExecutor:
         )
         plan = _make_plan([step])
 
-        with patch.object(executor, "_execute_step", return_value=_mock_step_result(1)):
-            result = executor.execute(plan)
+        with patch.object(
+            executor,
+            "_aexecute_step",
+            new_callable=AsyncMock,
+            return_value=_mock_step_result(1),
+        ):
+            result = await executor.aexecute(plan)
+
+        assert result.success
+        assert len(result.step_results) == 1
+        assert result.final_output == "result"
+
+    async def test_aexecute_parallel_independent_steps(self, sample_registry: ModelRegistry):
+        """Two independent steps (no depends_on) should both execute."""
+        executor = Executor(registry=sample_registry)
+        steps = [
+            Step(
+                id=1,
+                description="Step A",
+                model_id="openai/gpt-4.1-mini",
+                estimated_cost=0.001,
+                depends_on=[],
+            ),
+            Step(
+                id=2,
+                description="Step B",
+                model_id="openai/gpt-4.1-mini",
+                estimated_cost=0.001,
+                depends_on=[],
+            ),
+        ]
+        plan = _make_plan(steps)
+
+        async def mock_aexecute(step_id, model_id, prompt, budget_remaining):
+            return _mock_step_result(step_id, output=f"output-{step_id}")
+
+        with patch.object(executor, "_aexecute_step", side_effect=mock_aexecute):
+            result = await executor.aexecute(plan)
+
+        assert result.success
+        assert len(result.step_results) == 2
+        outputs = {sr.step_id: sr.output for sr in result.step_results}
+        assert outputs[1] == "output-1"
+        assert outputs[2] == "output-2"
+
+    async def test_aexecute_dependency_ordering(self, sample_registry: ModelRegistry):
+        """Step with dependency waits for prerequisite."""
+        executor = Executor(registry=sample_registry)
+        steps = [
+            Step(
+                id=1,
+                description="First",
+                model_id="openai/gpt-4.1-mini",
+                estimated_cost=0.001,
+                depends_on=[],
+            ),
+            Step(
+                id=2,
+                description="Second (depends on 1)",
+                model_id="openai/gpt-4.1-mini",
+                estimated_cost=0.001,
+                depends_on=[1],
+            ),
+        ]
+        plan = _make_plan(steps)
+
+        call_order: list[int] = []
+
+        async def mock_aexecute(step_id, model_id, prompt, budget_remaining):
+            call_order.append(step_id)
+            return _mock_step_result(step_id, output=f"output-{step_id}")
+
+        with patch.object(executor, "_aexecute_step", side_effect=mock_aexecute):
+            result = await executor.aexecute(plan)
+
+        assert result.success
+        # Step 1 must execute before step 2
+        assert call_order.index(1) < call_order.index(2)
+
+    async def test_aexecute_budget_exhaustion(self, sample_registry: ModelRegistry):
+        """Budget exhaustion should still work in async path."""
+        executor = Executor(registry=sample_registry)
+        steps = [
+            Step(
+                id=1,
+                description="Expensive",
+                model_id="openai/gpt-4.1-mini",
+                estimated_cost=0.5,
+                depends_on=[],
+            ),
+            Step(
+                id=2,
+                description="Should be skipped",
+                model_id="openai/gpt-4.1-mini",
+                estimated_cost=0.5,
+                depends_on=[1],
+            ),
+        ]
+        plan = _make_plan(steps, budget=0.001)
+
+        async def mock_aexecute(step_id, model_id, prompt, budget_remaining):
+            return _mock_step_result(step_id, cost=0.002)
+
+        with patch.object(executor, "_aexecute_step", side_effect=mock_aexecute):
+            result = await executor.aexecute(plan)
+
+        assert len(result.step_results) == 1
+        assert len(result.skipped_steps) == 1
+        assert not result.success
+
+    async def test_aexecute_ledger_populated(self, sample_registry: ModelRegistry):
+        """Ledger should have entries after async execution."""
+        executor = Executor(registry=sample_registry)
+        step = Step(
+            id=1,
+            description="Do something",
+            model_id="openai/gpt-4.1-mini",
+            estimated_cost=0.001,
+        )
+        plan = _make_plan([step])
+
+        with patch.object(
+            executor,
+            "_aexecute_step",
+            new_callable=AsyncMock,
+            return_value=_mock_step_result(1),
+        ):
+            result = await executor.aexecute(plan)
 
         assert len(result.ledger.entries) == 1
         entry = result.ledger.entries[0]
         assert entry.reason == "step 1 attempt 1"
         assert entry.success is True
-        assert entry.model_id == "test/model"
+
+    def test_execute_dispatches(self, sample_registry: ModelRegistry):
+        """execute() should produce results (dispatches to async or sequential)."""
+        executor = Executor(registry=sample_registry)
+        step = Step(
+            id=1,
+            description="Do something",
+            model_id="openai/gpt-4.1-mini",
+            estimated_cost=0.001,
+        )
+        plan = _make_plan([step])
+
+        with patch.object(
+            executor,
+            "_aexecute_step",
+            new_callable=AsyncMock,
+            return_value=_mock_step_result(1),
+        ):
+            result = executor.execute(plan)
+
+        assert result.success
+        assert len(result.step_results) == 1
+
+    def test_budget_remaining(self, sample_registry: ModelRegistry):
+        executor = Executor(registry=sample_registry)
+        steps = [
+            Step(id=1, description="Step 1", model_id="openai/gpt-4.1-mini", estimated_cost=0.01),
+        ]
+        plan = _make_plan(steps, budget=1.0)
+
+        with patch.object(
+            executor,
+            "_aexecute_step",
+            new_callable=AsyncMock,
+            return_value=_mock_step_result(1, cost=0.005),
+        ):
+            result = executor.execute(plan)
+
+        assert result.budget_remaining == pytest.approx(0.995)
 
     def test_ledger_tracks_failed_escalation(self, sample_registry: ModelRegistry):
         """Failed step + escalation should produce multiple ledger entries."""
@@ -313,8 +463,10 @@ class TestExecutor:
         escalated = _mock_step_result(1, model_id="anthropic/claude-opus-4", output="escalated")
         escalated.escalated = True
 
-        with patch.object(executor, "_execute_step", return_value=failed):
-            with patch.object(executor, "_escalate", return_value=escalated):
+        with patch.object(executor, "_aexecute_step", new_callable=AsyncMock, return_value=failed):
+            with patch.object(
+                executor, "_aescalate", new_callable=AsyncMock, return_value=escalated
+            ):
                 result = executor.execute(plan)
 
         # Should have at least the initial failed attempt recorded

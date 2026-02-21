@@ -71,6 +71,7 @@ class Plan(BaseModel):
     decomposition_error: str | None = Field(
         default=None, description="Error message if decomposition fell back"
     )
+    planner_cost: float = Field(default=0.0, description="Cost of the LLM decomposition call")
 
     def is_within_budget(self) -> bool:
         """Check if the plan's estimated cost fits the budget."""

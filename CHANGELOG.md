@@ -2,6 +2,18 @@
 
 All notable changes to TokenWise will be documented in this file.
 
+## [0.4.0] - 2026-02-21
+
+### Added
+- **Planner cost budgeted** — the LLM call used for task decomposition now has its cost tracked and deducted from the user's budget; `Plan.planner_cost` exposes the cost; CLI displays it when > 0
+- **Parallel step execution** — executor now runs independent steps concurrently via `asyncio.gather()`; steps declare `depends_on` indices in the decomposition prompt; the executor builds a DAG and launches ready steps in parallel; `execute()` delegates to `asyncio.run(aexecute())` transparently
+- **Persistent spend tracking** — new `LedgerStore` class persists execution history to a JSONL file (`~/.config/tokenwise/ledger.jsonl` by default); `tokenwise plan --execute` auto-saves; new `tokenwise ledger` CLI command shows history and `--summary` aggregates
+- **`TOKENWISE_LEDGER_PATH`** — new env var / config field to customize the ledger file path
+
+### Changed
+- **Decomposition prompt** — now asks the LLM to produce `depends_on` (0-indexed step indices) for each step; planner parses these and falls back to sequential chain if missing
+- **Executor** — `execute()` now dispatches to async DAG-based scheduling; falls back to sequential when already inside an async event loop
+
 ## [0.3.0] - 2026-02-20
 
 ### Added

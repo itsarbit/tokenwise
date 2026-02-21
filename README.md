@@ -130,6 +130,10 @@ tokenwise route "Debug this segfault" --strategy best_quality --budget 0.05
 # Plan and execute a complex task
 tokenwise plan "Build a REST API for a todo app" --budget 0.50 --execute
 
+# View spend history
+tokenwise ledger
+tokenwise ledger --summary
+
 # Start the OpenAI-compatible proxy
 tokenwise serve --port 8000
 
@@ -256,6 +260,7 @@ TokenWise reads configuration from environment variables and an optional config 
 | `TOKENWISE_PROXY_HOST` | Optional | Proxy server bind host | `127.0.0.1` |
 | `TOKENWISE_PROXY_PORT` | Optional | Proxy server bind port | `8000` |
 | `TOKENWISE_CACHE_TTL` | Optional | Model registry cache TTL (seconds) | `3600` |
+| `TOKENWISE_LEDGER_PATH` | Optional | Path to ledger JSONL file | `~/.config/tokenwise/ledger.jsonl` |
 | `TOKENWISE_LOCAL_MODELS` | Optional | Path to local models YAML for offline use | — |
 
 ```yaml
@@ -275,7 +280,8 @@ src/tokenwise/
 ├── router.py          # Router — two-stage pipeline: scenario → strategy
 ├── planner.py         # Planner — decomposes tasks, assigns models per step
 ├── executor.py        # Executor — runs plans, tracks spend, escalates on failure
-├── cli.py             # Typer CLI (models, route, plan, serve)
+├── ledger_store.py    # LedgerStore — persistent JSONL spend history
+├── cli.py             # Typer CLI (models, route, plan, ledger, serve)
 ├── proxy.py           # FastAPI OpenAI-compatible proxy server
 ├── providers/         # LLM provider adapters
 │   ├── openrouter.py  #   OpenRouter (default, routes via openrouter.ai)
@@ -293,11 +299,13 @@ LLM systems should be treated like distributed systems.
 
 That means clear failure semantics, explicit cost ceilings, predictable escalation, and observability. TokenWise is designed with that philosophy.
 
-## Known Limitations (v0.3)
+## Known Limitations (v0.4)
 
-- **Linear execution** — plan steps run sequentially; parallel step execution is not yet implemented.
-- **Planner cost not budgeted** — the LLM call used to decompose the task is not deducted from the user's budget.
-- **No persistent spend tracking** — the `CostLedger` lives in memory for a single plan execution; there is no cross-session spend history yet.
+All three v0.3 limitations have been resolved:
+
+- ~~Planner cost not budgeted~~ — planner LLM cost is now tracked and deducted from budget (v0.4)
+- ~~Linear execution~~ — independent steps now run in parallel via async DAG scheduling (v0.4)
+- ~~No persistent spend tracking~~ — execution history is persisted to JSONL; see `tokenwise ledger` (v0.4)
 
 ## Development
 

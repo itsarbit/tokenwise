@@ -53,6 +53,10 @@ class Settings(BaseModel):
     openai_api_key: str = Field(default="", description="OpenAI API key (direct)")
     anthropic_api_key: str = Field(default="", description="Anthropic API key (direct)")
     google_api_key: str = Field(default="", description="Google AI API key (direct)")
+    ledger_path: str = Field(
+        default="",
+        description="Path to ledger JSONL file (default: ~/.config/tokenwise/ledger.jsonl)",
+    )
     model_overrides: dict[str, dict] | None = Field(
         default=None,
         description="Per-model capability/tier overrides",
@@ -79,6 +83,7 @@ def load_settings(config_path: Path | None = None) -> Settings:
         "TOKENWISE_PROXY_PORT": "proxy_port",
         "TOKENWISE_CACHE_TTL": "cache_ttl",
         "TOKENWISE_LOCAL_MODELS": "local_models_file",
+        "TOKENWISE_LEDGER_PATH": "ledger_path",
         "OPENAI_API_KEY": "openai_api_key",
         "ANTHROPIC_API_KEY": "anthropic_api_key",
         "GOOGLE_API_KEY": "google_api_key",
