@@ -186,20 +186,20 @@ All strategies accept an optional `--budget` parameter that acts as a hard cost 
 
 TokenWise reads configuration from environment variables and an optional config file (`~/.config/tokenwise/config.yaml`).
 
-| Variable | Description | Default |
-|---|---|---|
-| `OPENROUTER_API_KEY` | OpenRouter API key (routes all providers) | — |
-| `OPENAI_API_KEY` | Direct OpenAI API key | — |
-| `ANTHROPIC_API_KEY` | Direct Anthropic API key | — |
-| `GOOGLE_API_KEY` | Direct Google AI API key | — |
-| `OPENROUTER_BASE_URL` | OpenRouter API base URL | `https://openrouter.ai/api/v1` |
-| `TOKENWISE_DEFAULT_STRATEGY` | Default routing strategy | `balanced` |
-| `TOKENWISE_DEFAULT_BUDGET` | Default budget in USD | `1.00` |
-| `TOKENWISE_PLANNER_MODEL` | Model used for task decomposition | `openai/gpt-4.1-mini` |
-| `TOKENWISE_PROXY_HOST` | Proxy server bind host | `127.0.0.1` |
-| `TOKENWISE_PROXY_PORT` | Proxy server bind port | `8000` |
-| `TOKENWISE_CACHE_TTL` | Model registry cache TTL (seconds) | `3600` |
-| `TOKENWISE_LOCAL_MODELS` | Path to local models YAML for offline use | — |
+| Variable | Required | Description | Default |
+|---|---|---|---|
+| `OPENROUTER_API_KEY` | **Yes** | OpenRouter API key (model discovery + fallback for LLM calls) | — |
+| `OPENAI_API_KEY` | Optional | Direct OpenAI API key; falls back to OpenRouter if not set | — |
+| `ANTHROPIC_API_KEY` | Optional | Direct Anthropic API key; falls back to OpenRouter if not set | — |
+| `GOOGLE_API_KEY` | Optional | Direct Google AI API key; falls back to OpenRouter if not set | — |
+| `OPENROUTER_BASE_URL` | Optional | OpenRouter API base URL | `https://openrouter.ai/api/v1` |
+| `TOKENWISE_DEFAULT_STRATEGY` | Optional | Default routing strategy | `balanced` |
+| `TOKENWISE_DEFAULT_BUDGET` | Optional | Default budget in USD | `1.00` |
+| `TOKENWISE_PLANNER_MODEL` | Optional | Model used for task decomposition | `openai/gpt-4.1-mini` |
+| `TOKENWISE_PROXY_HOST` | Optional | Proxy server bind host | `127.0.0.1` |
+| `TOKENWISE_PROXY_PORT` | Optional | Proxy server bind port | `8000` |
+| `TOKENWISE_CACHE_TTL` | Optional | Model registry cache TTL (seconds) | `3600` |
+| `TOKENWISE_LOCAL_MODELS` | Optional | Path to local models YAML for offline use | — |
 
 ### Config file example
 
