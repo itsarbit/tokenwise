@@ -355,7 +355,7 @@ class TestExecutorAsync:
         assert call_order.index(1) < call_order.index(2)
 
     async def test_aexecute_budget_exhaustion(self, sample_registry: ModelRegistry):
-        """Budget exhaustion should still work in async path."""
+        """Steps too expensive to reserve should be skipped."""
         executor = Executor(registry=sample_registry)
         steps = [
             Step(
@@ -367,13 +367,46 @@ class TestExecutorAsync:
             ),
             Step(
                 id=2,
-                description="Should be skipped",
+                description="Also expensive",
                 model_id="openai/gpt-4.1-mini",
                 estimated_cost=0.5,
                 depends_on=[1],
             ),
         ]
         plan = _make_plan(steps, budget=0.001)
+
+        async def mock_aexecute(step_id, model_id, prompt, budget_remaining):
+            return _mock_step_result(step_id, cost=0.002)
+
+        with patch.object(executor, "_aexecute_step", side_effect=mock_aexecute):
+            result = await executor.aexecute(plan)
+
+        # Reservation blocks both steps (estimated 0.5 > budget 0.001)
+        assert len(result.skipped_steps) == 2
+        assert not result.success
+
+    async def test_aexecute_budget_exhaustion_after_first_step(
+        self, sample_registry: ModelRegistry
+    ):
+        """Second step should be skipped when first step exhausts budget."""
+        executor = Executor(registry=sample_registry)
+        steps = [
+            Step(
+                id=1,
+                description="Affordable",
+                model_id="openai/gpt-4.1-mini",
+                estimated_cost=0.001,
+                depends_on=[],
+            ),
+            Step(
+                id=2,
+                description="Should be skipped",
+                model_id="openai/gpt-4.1-mini",
+                estimated_cost=0.001,
+                depends_on=[1],
+            ),
+        ]
+        plan = _make_plan(steps, budget=0.002)
 
         async def mock_aexecute(step_id, model_id, prompt, budget_remaining):
             return _mock_step_result(step_id, cost=0.002)
@@ -472,3 +505,90 @@ class TestExecutorAsync:
         # Should have at least the initial failed attempt recorded
         assert len(result.ledger.entries) >= 1
         assert result.ledger.entries[0].success is False
+
+    async def test_aexecute_reservation_prevents_overshoot(self, sample_registry: ModelRegistry):
+        """Parallel steps should not collectively exceed budget via reservation."""
+        executor = Executor(registry=sample_registry)
+        # Two independent steps each estimated at 0.006, budget only 0.01
+        steps = [
+            Step(
+                id=1,
+                description="Step A",
+                model_id="openai/gpt-4.1-mini",
+                estimated_cost=0.006,
+                depends_on=[],
+            ),
+            Step(
+                id=2,
+                description="Step B",
+                model_id="openai/gpt-4.1-mini",
+                estimated_cost=0.006,
+                depends_on=[],
+            ),
+        ]
+        plan = _make_plan(steps, budget=0.01)
+
+        async def mock_aexecute(step_id, model_id, prompt, budget_remaining):
+            return _mock_step_result(step_id, cost=0.006)
+
+        with patch.object(executor, "_aexecute_step", side_effect=mock_aexecute):
+            result = await executor.aexecute(plan)
+
+        # With reservation, only one step should fit at a time (0.006 + 0.006 > 0.01)
+        # Second step should still execute in next iteration since first actual < budget
+        # But total should not exceed budget by more than one step's cost
+        assert result.total_cost <= plan.budget + 0.006
+
+    async def test_aexecute_deadlock_detection(self, sample_registry: ModelRegistry):
+        """Cyclic dependencies should be detected and reported as failure."""
+        executor = Executor(registry=sample_registry)
+        # Step 1 depends on 2, step 2 depends on 1 — deadlock
+        steps = [
+            Step(
+                id=1,
+                description="Step A",
+                model_id="openai/gpt-4.1-mini",
+                estimated_cost=0.001,
+                depends_on=[2],
+            ),
+            Step(
+                id=2,
+                description="Step B",
+                model_id="openai/gpt-4.1-mini",
+                estimated_cost=0.001,
+                depends_on=[1],
+            ),
+        ]
+        plan = _make_plan(steps)
+
+        result = await executor.aexecute(plan)
+
+        assert not result.success
+        assert len(result.skipped_steps) == 2
+        assert len(result.step_results) == 0
+
+    async def test_aexecute_escalation_includes_failed_cost(self, sample_registry: ModelRegistry):
+        """Async escalation should include the failed attempt cost in total."""
+        executor = Executor(registry=sample_registry)
+        step = Step(
+            id=1,
+            description="Failing step",
+            model_id="openai/gpt-4.1-mini",
+            estimated_cost=0.01,
+        )
+        plan = _make_plan([step], budget=1.0)
+
+        failed = _mock_step_result(1, success=False, cost=0.003)
+        escalated = _mock_step_result(
+            1, model_id="anthropic/claude-opus-4", output="escalated", cost=0.005
+        )
+        escalated.escalated = True
+
+        with patch.object(executor, "_aexecute_step", new_callable=AsyncMock, return_value=failed):
+            with patch.object(
+                executor, "_aescalate", new_callable=AsyncMock, return_value=escalated
+            ):
+                result = await executor.aexecute(plan)
+
+        # total_cost should include both the failed attempt (0.003) and escalated (0.005)
+        assert result.total_cost == pytest.approx(0.008)

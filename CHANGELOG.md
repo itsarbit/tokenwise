@@ -13,6 +13,11 @@ All notable changes to TokenWise will be documented in this file.
 ### Changed
 - **Decomposition prompt** — now asks the LLM to produce `depends_on` (0-indexed step indices) for each step; planner parses these and falls back to sequential chain if missing
 - **Executor** — `execute()` now dispatches to async DAG-based scheduling; falls back to sequential when already inside an async event loop
+- **Parallel budget enforcement** — reservation-based allocation prevents parallel steps from collectively overshooting the budget; each step reserves its estimated cost before launch
+- **Async escalation cost tracking** — failed attempt costs are now correctly included in `total_cost` when escalation succeeds (previously lost in async path)
+- **Deadlock detection** — async executor detects dependency cycles and reports stuck steps as failures instead of silently exiting
+- **`_optimize_for_budget`** — now uses `step.required_capabilities` instead of the current model's first capability when downgrading models
+- **JSON parsing** — more tolerant code fence stripping (no newline required after opening fence); bracket-extraction fallback when fences don't match
 
 ## [0.3.0] - 2026-02-20
 
