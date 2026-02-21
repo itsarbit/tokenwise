@@ -17,6 +17,22 @@ Existing LLM routers (RouteLLM, LLMRouter, Not Diamond) only do single-query rou
 
 > **Note:** TokenWise uses [OpenRouter](https://openrouter.ai) as the default model gateway for model discovery and routing. You can also use direct provider APIs (OpenAI, Anthropic, Google) by setting the corresponding API keys — when a direct key is available, requests for that provider bypass OpenRouter automatically.
 
+## Comparison
+
+| Feature | TokenWise | [RouteLLM](https://github.com/lm-sys/RouteLLM) | [LiteLLM](https://github.com/BerriAI/litellm) | [Not Diamond](https://notdiamond.ai) | [Martian](https://withmartian.com) | [Portkey](https://portkey.ai) | [OpenRouter](https://openrouter.ai) |
+|---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| Task decomposition | **Yes** | - | - | - | - | - | - |
+| Strict budget ceiling | **Yes** | - | Yes | - | Per-request | Yes | Yes |
+| Tier-based escalation | **Yes** | - | Yes | - | - | Yes | - |
+| Capability-aware fallback | **Yes** | - | - | Partial | Yes | Partial | Partial |
+| Cost ledger | **Yes** | - | Yes | - | - | Yes | Dashboard |
+| OpenAI-compatible proxy | **Yes** | Yes | Yes | Yes | Yes | Yes | Yes |
+| CLI | **Yes** | - | Yes | - | - | - | - |
+| Python API | **Yes** | Yes | Yes | Yes | Via OpenAI SDK | Yes | Yes |
+| Self-hosted / open source | **Yes** | Yes | Yes | - | - | Gateway only | - |
+
+**Key differentiator:** TokenWise is the only router that also **plans** — it decomposes a complex task into subtasks, assigns the optimal model to each step within your budget, tracks spend across attempts with a structured cost ledger, and escalates to stronger models on failure. Every other tool on this list only routes individual queries.
+
 ## Features
 
 - **Budget-aware planning** — "I have $0.50, get this done" → planner picks the cheapest viable path

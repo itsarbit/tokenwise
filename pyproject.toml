@@ -54,6 +54,9 @@ tokenwise = "tokenwise.cli:app"
 [tool.hatch.build.targets.wheel]
 packages = ["src/tokenwise"]
 
+[tool.hatch.build]
+artifacts = ["*.json"]
+
 [tool.ruff]
 src = ["src"]
 line-length = 100
