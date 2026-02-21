@@ -4,7 +4,7 @@
 
 If you discover a security vulnerability in TokenWise, please report it responsibly.
 
-**Do not open a public issue.** Instead, email **security@itsarbit.com** with:
+**Do not open a public issue.** Instead, email **itsarbit@gmail.com** with:
 
 - Description of the vulnerability
 - Steps to reproduce
