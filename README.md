@@ -13,6 +13,8 @@
 
 <p align="center">Production-grade LLM routing with budget ceilings, tiered escalation, and multi-provider failover.</p>
 
+<p align="center"><a href="https://itsarbit.substack.com/p/llm-routers-are-not-enough">Read the blog post: <em>LLM Routers Are Not Enough</em></a></p>
+
 ---
 
 TokenWise is not just a model picker.
