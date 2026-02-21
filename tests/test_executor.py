@@ -86,6 +86,7 @@ class TestExecutorSequential:
         assert result.total_cost == pytest.approx(0.002)
 
     def test_budget_exhaustion_stops_execution(self, sample_registry: ModelRegistry):
+        """Steps whose estimated cost exceeds remaining budget are skipped pre-call."""
         executor = Executor(registry=sample_registry)
         steps = [
             Step(id=1, description="Expensive", model_id="openai/gpt-4.1-mini", estimated_cost=0.5),
@@ -93,22 +94,43 @@ class TestExecutorSequential:
         ]
         plan = _make_plan(steps, budget=0.001)
 
+        result = executor._execute_sequential(plan)
+
+        # Both skipped: pre-call check sees estimated 0.5 > budget 0.001
+        assert len(result.skipped_steps) == 2
+        assert not result.success
+
+    def test_budget_exhaustion_after_run(self, sample_registry: ModelRegistry):
+        """Second step skipped when first step's actual cost exhausts budget."""
+        executor = Executor(registry=sample_registry)
+        steps = [
+            Step(
+                id=1,
+                description="Affordable",
+                model_id="openai/gpt-4.1-mini",
+                estimated_cost=0.001,
+            ),
+            Step(id=2, description="Skipped", model_id="openai/gpt-4.1-mini", estimated_cost=0.5),
+        ]
+        plan = _make_plan(steps, budget=0.01)
+
         with patch.object(executor, "_execute_step") as mock_exec:
-            mock_exec.return_value = _mock_step_result(1, cost=0.002)
+            mock_exec.return_value = _mock_step_result(1, cost=0.005)
             result = executor._execute_sequential(plan)
 
         assert len(result.step_results) == 1
+        assert len(result.skipped_steps) == 1
         assert not result.success
 
     def test_skipped_steps_recorded(self, sample_registry: ModelRegistry):
         """Skipped steps should be recorded in result.skipped_steps."""
         executor = Executor(registry=sample_registry)
         steps = [
-            Step(id=1, description="Runs", model_id="openai/gpt-4.1-mini", estimated_cost=0.5),
+            Step(id=1, description="Runs", model_id="openai/gpt-4.1-mini", estimated_cost=0.001),
             Step(id=2, description="Skipped A", model_id="openai/gpt-4.1-mini", estimated_cost=0.5),
             Step(id=3, description="Skipped B", model_id="openai/gpt-4.1-mini", estimated_cost=0.5),
         ]
-        plan = _make_plan(steps, budget=0.001)
+        plan = _make_plan(steps, budget=0.01)
 
         with patch.object(executor, "_execute_step") as mock_exec:
             mock_exec.return_value = _mock_step_result(1, cost=0.002)

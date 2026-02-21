@@ -74,6 +74,19 @@ class Executor:
                 continue
 
             remaining = plan.budget - result.total_cost
+
+            # Pre-call estimate check: skip if estimated cost exceeds remaining budget
+            if step.estimated_cost > remaining:
+                logger.warning(
+                    "Step %d estimated cost $%.4f exceeds remaining $%.4f, skipping",
+                    step.id,
+                    step.estimated_cost,
+                    remaining,
+                )
+                result.skipped_steps.append(step)
+                result.success = False
+                continue
+
             prompt = self._build_prompt(step.description, step.prompt_template, prior_outputs)
 
             if step.model_id in self._failed_models:

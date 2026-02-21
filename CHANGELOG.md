@@ -2,6 +2,12 @@
 
 All notable changes to TokenWise will be documented in this file.
 
+## [0.4.1] - 2026-02-21
+
+### Fixed
+- **Strict budget enforcement at call time** — sequential executor now checks step's estimated cost against remaining budget before making the LLM call; steps that would exceed budget are skipped
+- **Ledger store summary** — removed redundant `load(limit=0)` call; `summary()` now uses `_load_all()` directly
+
 ## [0.4.0] - 2026-02-21
 
 ### Added
