@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import typer
 from rich.console import Console
 from rich.table import Table
 
+from tokenwise.config import get_settings
 from tokenwise.executor import Executor
+from tokenwise.ledger_store import LedgerStore
 from tokenwise.planner import Planner
 from tokenwise.registry import ModelRegistry
 from tokenwise.router import Router
@@ -135,6 +139,8 @@ def plan(
         )
     console.print(f"[bold]Budget:[/bold] ${task_plan.budget:.2f}")
     console.print(f"[bold]Estimated cost:[/bold] ${task_plan.total_estimated_cost:.4f}")
+    if task_plan.planner_cost > 0:
+        console.print(f"[bold]Planner cost:[/bold] ${task_plan.planner_cost:.4f}")
     within = "[green]Yes[/green]" if task_plan.is_within_budget() else "[red]No[/red]"
     console.print(f"[bold]Within budget:[/bold] {within}\n")
 
@@ -156,6 +162,11 @@ def plan(
         )
 
     console.print(table)
+
+    # Show parallelism info
+    independent = sum(1 for s in task_plan.steps if not s.depends_on)
+    if independent > 1:
+        console.print(f"\n[dim]{independent} steps can run in parallel (no dependencies)[/dim]")
 
     if execute:
         console.print("\n[bold]Executing plan...[/bold]\n")
@@ -204,6 +215,65 @@ def plan(
 
         if result.final_output:
             console.print(f"\n[bold]Output:[/bold]\n{result.final_output[:2000]}")
+
+        # Persist to ledger store
+        settings = get_settings()
+        store_path = Path(settings.ledger_path) if settings.ledger_path else None
+        store = LedgerStore(path=store_path)
+        store.save(
+            task=task_plan.task,
+            ledger=result.ledger,
+            budget=task_plan.budget,
+            success=result.success,
+            planner_cost=task_plan.planner_cost,
+        )
+        console.print(f"\n[dim]Saved to ledger: {store.path}[/dim]")
+
+
+@app.command()
+def ledger(
+    limit: int = typer.Option(20, "--limit", "-n", help="Number of recent entries to show"),
+    summary: bool = typer.Option(False, "--summary", "-s", help="Show aggregate spend statistics"),
+) -> None:
+    """Show persistent spend history across sessions."""
+    settings = get_settings()
+    store_path = Path(settings.ledger_path) if settings.ledger_path else None
+    store = LedgerStore(path=store_path)
+
+    if summary:
+        stats = store.summary()
+        console.print("\n[bold]Spend Summary[/bold]")
+        console.print(f"  Total tasks:    {stats['num_tasks']}")
+        console.print(f"  Succeeded:      {stats['num_succeeded']}")
+        console.print(f"  Failed:         {stats['num_failed']}")
+        console.print(f"  Total spend:    ${stats['total_spend']:.4f}")
+        console.print(f"  Planner spend:  ${stats['total_planner_spend']:.4f}")
+        console.print(f"  Wasted spend:   ${stats['total_wasted']:.4f}")
+        return
+
+    records = store.load(limit=limit)
+    if not records:
+        console.print("[dim]No ledger entries found.[/dim]")
+        return
+
+    table = Table(title="Spend History")
+    table.add_column("Timestamp", style="dim", max_width=20)
+    table.add_column("Task", max_width=40)
+    table.add_column("Cost", justify="right", style="green")
+    table.add_column("Budget", justify="right")
+    table.add_column("OK?", justify="center")
+
+    for r in records:
+        ts = r.get("timestamp", "?")[:19]
+        task_str = r.get("task", "?")
+        if len(task_str) > 40:
+            task_str = task_str[:37] + "..."
+        cost = r.get("total_cost", 0.0)
+        budget_val = r.get("budget", 0.0)
+        ok = "[green]Y[/green]" if r.get("success") else "[red]N[/red]"
+        table.add_row(ts, task_str, f"${cost:.4f}", f"${budget_val:.2f}", ok)
+
+    console.print(table)
 
 
 @app.command()

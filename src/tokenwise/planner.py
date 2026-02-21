@@ -24,6 +24,9 @@ class _DecomposeResult:
     steps: list[dict[str, Any]] = field(default_factory=list)
     source: str = "llm"  # "llm" or "fallback"
     error: str | None = None
+    planner_cost: float = 0.0
+    planner_input_tokens: int = 0
+    planner_output_tokens: int = 0
 
 
 _DECOMPOSITION_PROMPT = """\
@@ -35,17 +38,20 @@ Return ONLY a JSON array of objects with these fields:
 - "capability": the type of skill needed ("code", "reasoning", "creative", "math", or "general")
 - "estimated_input_tokens": approximate input tokens (integer)
 - "estimated_output_tokens": approximate output tokens (integer)
+- "depends_on": list of step indices (0-indexed) this step depends on, or [] if independent
 
 Example:
 [
   {{"description": "Design the REST API endpoints",
    "capability": "code",
    "estimated_input_tokens": 500,
-   "estimated_output_tokens": 800}},
+   "estimated_output_tokens": 800,
+   "depends_on": []}},
   {{"description": "Write the database schema",
    "capability": "code",
    "estimated_input_tokens": 600,
-   "estimated_output_tokens": 600}}
+   "estimated_output_tokens": 600,
+   "depends_on": []}}
 ]
 
 Task: {task}
@@ -88,8 +94,9 @@ class Planner:
         # Step 1: Decompose the task using the planner model
         decomposition = self._decompose_task(task)
 
-        # Step 2: Assign models to each step within budget
-        steps = self._assign_models(decomposition.steps, budget)
+        # Step 2: Assign models to each step within budget (deducting planner cost)
+        effective_budget = budget - decomposition.planner_cost
+        steps = self._assign_models(decomposition.steps, max(effective_budget, 0))
 
         # Step 3: Build the plan
         total_cost = sum(s.estimated_cost for s in steps)
@@ -100,6 +107,7 @@ class Planner:
             budget=budget,
             decomposition_source=decomposition.source,
             decomposition_error=decomposition.error,
+            planner_cost=decomposition.planner_cost,
         )
 
         # If over budget, try to trim by using cheaper models
@@ -125,9 +133,23 @@ class Planner:
                 timeout=60.0,
             )
             content = data["choices"][0]["message"]["content"]
+
+            # Extract planner cost from usage data
+            usage = data.get("usage", {})
+            p_in = usage.get("prompt_tokens", 0)
+            p_out = usage.get("completion_tokens", 0)
+            planner_model = self.registry.get_model(settings.planner_model)
+            p_cost = planner_model.estimate_cost(p_in, p_out) if planner_model else 0.0
+
             parsed = self._parse_steps_json(content)
             if parsed:
-                return _DecomposeResult(steps=parsed, source="llm")
+                return _DecomposeResult(
+                    steps=parsed,
+                    source="llm",
+                    planner_cost=p_cost,
+                    planner_input_tokens=p_in,
+                    planner_output_tokens=p_out,
+                )
             # Parse returned empty list — content was invalid JSON
             logger.warning(
                 "Could not parse LLM decomposition, first 500 chars: %s",
@@ -137,6 +159,9 @@ class Planner:
                 steps=self._fallback_decomposition(task),
                 source="fallback",
                 error=f"Invalid JSON in LLM response (first 100 chars: {content[:100]})",
+                planner_cost=p_cost,
+                planner_input_tokens=p_in,
+                planner_output_tokens=p_out,
             )
         except MissingAPIKeyError:
             raise
@@ -221,6 +246,14 @@ class Planner:
             if capability and capability != "general":
                 required_caps.append(capability)
 
+            # Parse depends_on: convert 0-indexed raw indices to 1-indexed step IDs
+            raw_deps = raw.get("depends_on")
+            if isinstance(raw_deps, list) and all(isinstance(d, int) for d in raw_deps):
+                depends_on = [d + 1 for d in raw_deps if 0 <= d < i]
+            else:
+                # Fallback to sequential chain
+                depends_on = [i] if i > 0 else []
+
             steps.append(
                 Step(
                     id=i + 1,
@@ -229,7 +262,7 @@ class Planner:
                     estimated_input_tokens=est_in,
                     estimated_output_tokens=est_out,
                     estimated_cost=cost,
-                    depends_on=[i] if i > 0 else [],
+                    depends_on=depends_on,
                     required_capabilities=required_caps,
                 )
             )

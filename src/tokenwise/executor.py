@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 import httpx
@@ -35,21 +36,32 @@ class Executor:
         self._failed_models: set[str] = set()
 
     def execute(self, plan: Plan) -> PlanResult:
-        """Execute all steps in a plan sequentially.
+        """Execute all steps in a plan, using async DAG scheduling when possible.
 
+        Steps with satisfied dependencies run concurrently.
         Tracks actual cost and stops if budget is exceeded.
         On step failure, attempts escalation to a stronger model.
 
         Returns:
             PlanResult with all step outputs and cost tracking.
         """
+        try:
+            asyncio.get_running_loop()
+            # Already in an async context — fall back to sequential to avoid
+            # nested event loop issues
+            return self._execute_sequential(plan)
+        except RuntimeError:
+            pass
+        return asyncio.run(self.aexecute(plan))
+
+    def _execute_sequential(self, plan: Plan) -> PlanResult:
+        """Execute all steps sequentially (used when already in async context)."""
         result = PlanResult(task=plan.task, budget=plan.budget)
         prior_outputs: dict[int, str] = {}
         self._failed_models.clear()
 
         budget_exhausted = False
         for step in plan.steps:
-            # Check budget before executing
             if result.total_cost >= plan.budget:
                 if not budget_exhausted:
                     logger.warning(
@@ -62,11 +74,8 @@ class Executor:
                 continue
 
             remaining = plan.budget - result.total_cost
-
-            # Build prompt with context from prior steps
             prompt = self._build_prompt(step.description, step.prompt_template, prior_outputs)
 
-            # If the planned model already failed in a prior step, skip straight to fallback
             if step.model_id in self._failed_models:
                 step_result = StepResult(
                     step_id=step.id,
@@ -84,7 +93,6 @@ class Executor:
                 if not step_result.success and self._is_model_error(step_result):
                     self._failed_models.add(step.model_id)
 
-            # Record the initial attempt in the ledger
             result.ledger.record(
                 reason=f"step {step.id} attempt 1",
                 model_id=step_result.model_id,
@@ -94,31 +102,226 @@ class Executor:
                 success=step_result.success,
             )
 
-            # If step failed and we have budget, try fallback models
             has_budget = result.total_cost + step_result.actual_cost < plan.budget
             if not step_result.success and has_budget:
                 escalated = self._escalate(
                     step, prompt, remaining - step_result.actual_cost, result.ledger
                 )
                 if escalated is not None:
-                    result.total_cost += step_result.actual_cost  # still pay for the failed attempt
+                    result.total_cost += step_result.actual_cost
                     step_result = escalated
 
             result.step_results.append(step_result)
             result.total_cost += step_result.actual_cost
             prior_outputs[step.id] = step_result.output
 
-        # Final output is the last successful step's output
         for sr in reversed(result.step_results):
             if sr.success and sr.output:
                 result.final_output = sr.output
                 break
 
-        # Fail if any step failed or if steps were skipped due to budget
         all_steps_ran = len(result.step_results) == len(plan.steps)
         all_succeeded = all(sr.success for sr in result.step_results)
         result.success = all_steps_ran and all_succeeded
         return result
+
+    async def aexecute(self, plan: Plan) -> PlanResult:
+        """Execute plan steps concurrently according to their dependency graph.
+
+        Steps whose dependencies are all satisfied are launched in parallel.
+        """
+        result = PlanResult(task=plan.task, budget=plan.budget)
+        self._failed_models.clear()
+
+        # Build lookup structures
+        step_map: dict[int, Step] = {s.id: s for s in plan.steps}
+        completed: dict[int, StepResult] = {}
+        outputs: dict[int, str] = {}
+        all_ids = {s.id for s in plan.steps}
+
+        while True:
+            if result.total_cost >= plan.budget:
+                # Mark all remaining steps as skipped
+                for sid in sorted(all_ids - set(completed)):
+                    result.skipped_steps.append(step_map[sid])
+                result.success = False
+                break
+
+            # Find ready steps: all deps satisfied, not yet completed
+            ready: list[Step] = []
+            for step in plan.steps:
+                if step.id in completed:
+                    continue
+                deps_met = all(d in completed for d in step.depends_on)
+                if deps_met:
+                    ready.append(step)
+
+            if not ready:
+                # No more steps can run (all done, or deadlock)
+                break
+
+            # Execute ready steps concurrently
+            tasks = [
+                self._arun_step(step, outputs, plan.budget - result.total_cost, result.ledger)
+                for step in ready
+            ]
+            step_results = await asyncio.gather(*tasks)
+
+            for step, step_result in zip(ready, step_results):
+                completed[step.id] = step_result
+                result.step_results.append(step_result)
+                result.total_cost += step_result.actual_cost
+                outputs[step.id] = step_result.output
+
+        # Final output is the last successful step's output (by step id order)
+        for sr in sorted(result.step_results, key=lambda s: s.step_id, reverse=True):
+            if sr.success and sr.output:
+                result.final_output = sr.output
+                break
+
+        all_steps_ran = len(result.step_results) == len(plan.steps)
+        all_succeeded = all(sr.success for sr in result.step_results)
+        result.success = all_steps_ran and all_succeeded
+        return result
+
+    async def _arun_step(
+        self,
+        step: Step,
+        prior_outputs: dict[int, str],
+        budget_remaining: float,
+        ledger: CostLedger,
+    ) -> StepResult:
+        """Execute a single step asynchronously, with escalation on failure."""
+        prompt = self._build_prompt(step.description, step.prompt_template, prior_outputs)
+
+        if step.model_id in self._failed_models:
+            step_result = StepResult(
+                step_id=step.id,
+                model_id=step.model_id,
+                success=False,
+                error="Skipped (model failed earlier)",
+            )
+        else:
+            step_result = await self._aexecute_step(
+                step_id=step.id,
+                model_id=step.model_id,
+                prompt=prompt,
+                budget_remaining=budget_remaining,
+            )
+            if not step_result.success and self._is_model_error(step_result):
+                self._failed_models.add(step.model_id)
+
+        ledger.record(
+            reason=f"step {step.id} attempt 1",
+            model_id=step_result.model_id,
+            input_tokens=step_result.input_tokens,
+            output_tokens=step_result.output_tokens,
+            cost=step_result.actual_cost,
+            success=step_result.success,
+        )
+
+        has_budget = step_result.actual_cost < budget_remaining
+        if not step_result.success and has_budget:
+            escalated = await self._aescalate(
+                step, prompt, budget_remaining - step_result.actual_cost, ledger
+            )
+            if escalated is not None:
+                step_result = escalated
+
+        return step_result
+
+    async def _aexecute_step(
+        self,
+        step_id: int,
+        model_id: str,
+        prompt: str,
+        budget_remaining: float,
+    ) -> StepResult:
+        """Execute a single step via async provider call."""
+        try:
+            provider, provider_model = self._resolver.resolve(model_id)
+            data = await provider.achat_completion(
+                model=provider_model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.7,
+            )
+
+            content = data["choices"][0]["message"]["content"]
+            usage = data.get("usage", {})
+            input_tokens = usage.get("prompt_tokens", 0)
+            output_tokens = usage.get("completion_tokens", 0)
+
+            model = self.registry.get_model(model_id)
+            actual_cost = model.estimate_cost(input_tokens, output_tokens) if model else 0.0
+
+            return StepResult(
+                step_id=step_id,
+                model_id=model_id,
+                output=content,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                actual_cost=actual_cost,
+                success=True,
+            )
+
+        except httpx.HTTPStatusError as e:
+            status = e.response.status_code
+            logger.error("Step %d failed with model %s: HTTP %d", step_id, model_id, status)
+            return StepResult(
+                step_id=step_id,
+                model_id=model_id,
+                success=False,
+                error=str(e),
+                http_status_code=status,
+            )
+        except Exception as e:
+            logger.error("Step %d failed with model %s: %s", step_id, model_id, e)
+            return StepResult(
+                step_id=step_id,
+                model_id=model_id,
+                success=False,
+                error=str(e),
+            )
+
+    async def _aescalate(
+        self,
+        step: Step,
+        prompt: str,
+        budget_remaining: float,
+        ledger: CostLedger | None = None,
+    ) -> StepResult | None:
+        """Async version of _escalate: try alternative models on failure."""
+        if ledger is None:
+            ledger = CostLedger()
+
+        logger.info("Escalating step %d — trying alternative models", step.id)
+
+        tried = {step.model_id} | self._failed_models
+        candidates = self._get_fallback_candidates(tried, budget_remaining, step)
+
+        for attempt_num, model in enumerate(candidates[:5], start=1):
+            tried.add(model.id)
+            result = await self._aexecute_step(step.id, model.id, prompt, budget_remaining)
+            result.escalated = True
+
+            ledger.record(
+                reason=f"step {step.id} escalation attempt {attempt_num}",
+                model_id=model.id,
+                input_tokens=result.input_tokens,
+                output_tokens=result.output_tokens,
+                cost=result.actual_cost,
+                success=result.success,
+            )
+
+            if result.success:
+                return result
+            if self._is_model_error(result):
+                self._failed_models.add(model.id)
+                logger.info("Model %s unavailable, trying next", model.id)
+                continue
+            break
+
+        return None
 
     def _build_prompt(self, description: str, template: str, prior_outputs: dict[int, str]) -> str:
         """Build the prompt for a step, including prior context."""
