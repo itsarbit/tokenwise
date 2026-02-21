@@ -57,7 +57,9 @@ class Executor:
             # If the planned model already failed in a prior step, skip straight to fallback
             if step.model_id in self._failed_models:
                 step_result = StepResult(
-                    step_id=step.id, model_id=step.model_id, success=False,
+                    step_id=step.id,
+                    model_id=step.model_id,
+                    success=False,
                     error="Skipped (model failed earlier)",
                 )
             else:
@@ -132,9 +134,7 @@ class Executor:
             output_tokens = usage.get("completion_tokens", 0)
 
             model = self.registry.get_model(model_id)
-            actual_cost = (
-                model.estimate_cost(input_tokens, output_tokens) if model else 0.0
-            )
+            actual_cost = model.estimate_cost(input_tokens, output_tokens) if model else 0.0
 
             return StepResult(
                 step_id=step_id,

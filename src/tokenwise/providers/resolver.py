@@ -46,9 +46,7 @@ class ProviderResolver:
         """Return ``(provider, model_name)`` for *model_id*."""
         settings = get_settings()
         prefix = model_id.split("/")[0] if "/" in model_id else ""
-        bare_model = (
-            model_id.split("/", 1)[1] if "/" in model_id else model_id
-        )
+        bare_model = model_id.split("/", 1)[1] if "/" in model_id else model_id
 
         # Check for a direct provider key
         if prefix in _DIRECT_PROVIDERS:
@@ -72,7 +70,9 @@ class ProviderResolver:
         return provider, model_id  # OpenRouter wants the full prefixed ID
 
     def _get_or_create(
-        self, key: str, factory: Any,
+        self,
+        key: str,
+        factory: Any,
     ) -> LLMProvider:
         if key not in self._cache:
             self._cache[key] = factory()

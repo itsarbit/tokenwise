@@ -51,9 +51,7 @@ class Settings(BaseModel):
         default=None, description="Path to a local models YAML file for offline use"
     )
     openai_api_key: str = Field(default="", description="OpenAI API key (direct)")
-    anthropic_api_key: str = Field(
-        default="", description="Anthropic API key (direct)"
-    )
+    anthropic_api_key: str = Field(default="", description="Anthropic API key (direct)")
     google_api_key: str = Field(default="", description="Google AI API key (direct)")
     model_overrides: dict[str, dict] | None = Field(
         default=None,

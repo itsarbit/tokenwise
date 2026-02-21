@@ -49,10 +49,12 @@ class GoogleProvider:
                 }
             else:
                 role = "model" if msg["role"] == "assistant" else "user"
-                contents.append({
-                    "role": role,
-                    "parts": [{"text": msg.get("content", "")}],
-                })
+                contents.append(
+                    {
+                        "role": role,
+                        "parts": [{"text": msg.get("content", "")}],
+                    }
+                )
 
         payload: dict[str, Any] = {"contents": contents}
         if system_instruction:
@@ -70,7 +72,8 @@ class GoogleProvider:
 
     @staticmethod
     def _to_openai_response(
-        data: dict[str, Any], model: str,
+        data: dict[str, Any],
+        model: str,
     ) -> dict[str, Any]:
         """Convert Gemini response to OpenAI-compatible format."""
         candidates = data.get("candidates", [])
@@ -91,16 +94,19 @@ class GoogleProvider:
             "id": "",
             "object": "chat.completion",
             "model": model,
-            "choices": [{
-                "index": 0,
-                "message": {"role": "assistant", "content": content},
-                "finish_reason": finish_reason,
-            }],
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": content},
+                    "finish_reason": finish_reason,
+                }
+            ],
             "usage": {
                 "prompt_tokens": prompt_tokens,
                 "completion_tokens": completion_tokens,
                 "total_tokens": usage.get(
-                    "totalTokenCount", prompt_tokens + completion_tokens,
+                    "totalTokenCount",
+                    prompt_tokens + completion_tokens,
                 ),
             },
         }
@@ -117,10 +123,7 @@ class GoogleProvider:
         timeout: float = 120.0,
     ) -> dict[str, Any]:
         payload = self._to_gemini_request(messages, temperature, max_tokens)
-        url = (
-            f"{self.base_url}/models/{model}:generateContent"
-            f"?key={self.api_key}"
-        )
+        url = f"{self.base_url}/models/{model}:generateContent?key={self.api_key}"
         resp = httpx.post(
             url,
             headers={"Content-Type": "application/json"},
@@ -142,10 +145,7 @@ class GoogleProvider:
         timeout: float = 120.0,
     ) -> dict[str, Any]:
         payload = self._to_gemini_request(messages, temperature, max_tokens)
-        url = (
-            f"{self.base_url}/models/{model}:generateContent"
-            f"?key={self.api_key}"
-        )
+        url = f"{self.base_url}/models/{model}:generateContent?key={self.api_key}"
         async with httpx.AsyncClient(timeout=timeout) as client:
             resp = await client.post(
                 url,
@@ -166,10 +166,7 @@ class GoogleProvider:
     ) -> AsyncIterator[str]:
         """Stream from Gemini, converting to OpenAI SSE format."""
         payload = self._to_gemini_request(messages, temperature, max_tokens)
-        url = (
-            f"{self.base_url}/models/{model}:streamGenerateContent"
-            f"?key={self.api_key}&alt=sse"
-        )
+        url = f"{self.base_url}/models/{model}:streamGenerateContent?key={self.api_key}&alt=sse"
         async with httpx.AsyncClient(timeout=timeout) as client:
             async with client.stream(
                 "POST",
@@ -194,7 +191,8 @@ class GoogleProvider:
 
     @staticmethod
     def _convert_stream_event(
-        event: dict[str, Any], model: str,
+        event: dict[str, Any],
+        model: str,
     ) -> str | None:
         """Convert a Gemini streaming event to an OpenAI SSE data line."""
         candidates = event.get("candidates", [])
@@ -210,10 +208,12 @@ class GoogleProvider:
             "id": "",
             "object": "chat.completion.chunk",
             "model": model,
-            "choices": [{
-                "index": 0,
-                "delta": {"content": text},
-                "finish_reason": None,
-            }],
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {"content": text},
+                    "finish_reason": None,
+                }
+            ],
         }
         return "data: " + json.dumps(chunk)

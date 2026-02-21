@@ -17,6 +17,7 @@ from tokenwise.models import ModelInfo, ModelTier
 # Curated capability mapping
 # ---------------------------------------------------------------------------
 
+
 @lru_cache(maxsize=1)
 def _load_capability_map() -> list[dict]:
     """Load the curated model-family capability mapping from package data."""
@@ -69,6 +70,7 @@ def _infer_tier_from_price(input_price: float) -> ModelTier:
 # API metadata helpers
 # ---------------------------------------------------------------------------
 
+
 def _has_vision(api_data: dict) -> bool:
     """Check if the model supports image input based on OpenRouter modality."""
     modality = api_data.get("architecture", {}).get("modality", "")
@@ -98,6 +100,7 @@ def _apply_overrides(
 # ---------------------------------------------------------------------------
 # Model parsing
 # ---------------------------------------------------------------------------
+
 
 def _parse_openrouter_model(data: dict) -> ModelInfo:
     """Parse an OpenRouter API model entry into ModelInfo."""

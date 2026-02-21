@@ -54,10 +54,12 @@ class AnthropicProvider:
             if msg["role"] == "system":
                 system = msg.get("content", "")
             else:
-                anthropic_msgs.append({
-                    "role": msg["role"],
-                    "content": msg.get("content", ""),
-                })
+                anthropic_msgs.append(
+                    {
+                        "role": msg["role"],
+                        "content": msg.get("content", ""),
+                    }
+                )
 
         payload: dict[str, Any] = {
             "model": model,
@@ -87,11 +89,13 @@ class AnthropicProvider:
             "id": data.get("id", ""),
             "object": "chat.completion",
             "model": data.get("model", ""),
-            "choices": [{
-                "index": 0,
-                "message": {"role": "assistant", "content": content},
-                "finish_reason": _STOP_REASON_MAP.get(stop_reason, "stop"),
-            }],
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": content},
+                    "finish_reason": _STOP_REASON_MAP.get(stop_reason, "stop"),
+                }
+            ],
             "usage": {
                 "prompt_tokens": input_tokens,
                 "completion_tokens": output_tokens,
@@ -111,7 +115,10 @@ class AnthropicProvider:
         timeout: float = 120.0,
     ) -> dict[str, Any]:
         payload = self._to_anthropic_request(
-            model, messages, temperature, max_tokens,
+            model,
+            messages,
+            temperature,
+            max_tokens,
         )
         resp = httpx.post(
             f"{self.base_url}/messages",
@@ -134,7 +141,10 @@ class AnthropicProvider:
         timeout: float = 120.0,
     ) -> dict[str, Any]:
         payload = self._to_anthropic_request(
-            model, messages, temperature, max_tokens,
+            model,
+            messages,
+            temperature,
+            max_tokens,
         )
         async with httpx.AsyncClient(timeout=timeout) as client:
             resp = await client.post(
@@ -156,7 +166,10 @@ class AnthropicProvider:
     ) -> AsyncIterator[str]:
         """Stream from Anthropic, converting events to OpenAI SSE format."""
         payload = self._to_anthropic_request(
-            model, messages, temperature, max_tokens,
+            model,
+            messages,
+            temperature,
+            max_tokens,
         )
         payload["stream"] = True
 
@@ -180,7 +193,8 @@ class AnthropicProvider:
                     except json.JSONDecodeError:
                         continue
                     chunk_line = self._convert_stream_event(
-                        event, model,
+                        event,
+                        model,
                     )
                     if chunk_line:
                         yield chunk_line
@@ -190,7 +204,8 @@ class AnthropicProvider:
 
     @staticmethod
     def _convert_stream_event(
-        event: dict[str, Any], model: str,
+        event: dict[str, Any],
+        model: str,
     ) -> str | None:
         """Convert an Anthropic streaming event to an OpenAI SSE data line."""
         event_type = event.get("type", "")
@@ -203,11 +218,13 @@ class AnthropicProvider:
                     "id": "",
                     "object": "chat.completion.chunk",
                     "model": model,
-                    "choices": [{
-                        "index": 0,
-                        "delta": {"content": text},
-                        "finish_reason": None,
-                    }],
+                    "choices": [
+                        {
+                            "index": 0,
+                            "delta": {"content": text},
+                            "finish_reason": None,
+                        }
+                    ],
                 }
                 return "data: " + json.dumps(chunk)
 
@@ -218,11 +235,13 @@ class AnthropicProvider:
                 "id": "",
                 "object": "chat.completion.chunk",
                 "model": model,
-                "choices": [{
-                    "index": 0,
-                    "delta": {},
-                    "finish_reason": finish,
-                }],
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {},
+                        "finish_reason": finish,
+                    }
+                ],
             }
             return "data: " + json.dumps(chunk)
 

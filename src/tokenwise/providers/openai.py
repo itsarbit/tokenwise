@@ -13,6 +13,8 @@ class OpenAIProvider(OpenAICompatibleProvider):
     name = "openai"
 
     def __init__(
-        self, api_key: str, base_url: str = _DEFAULT_BASE_URL,
+        self,
+        api_key: str,
+        base_url: str = _DEFAULT_BASE_URL,
     ) -> None:
         super().__init__(api_key, base_url)

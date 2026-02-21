@@ -18,11 +18,13 @@ _OPENAI_RESPONSE = {
     "id": "chatcmpl-123",
     "object": "chat.completion",
     "model": "gpt-4.1-mini",
-    "choices": [{
-        "index": 0,
-        "message": {"role": "assistant", "content": "Hello!"},
-        "finish_reason": "stop",
-    }],
+    "choices": [
+        {
+            "index": 0,
+            "message": {"role": "assistant", "content": "Hello!"},
+            "finish_reason": "stop",
+        }
+    ],
     "usage": {
         "prompt_tokens": 5,
         "completion_tokens": 3,
@@ -84,7 +86,10 @@ class TestAnthropicProvider:
             {"role": "user", "content": "Hi"},
         ]
         payload = AnthropicProvider._to_anthropic_request(
-            "claude-sonnet-4", messages, None, 1024,
+            "claude-sonnet-4",
+            messages,
+            None,
+            1024,
         )
         assert payload["system"] == "You are helpful"
         assert len(payload["messages"]) == 1
@@ -127,10 +132,12 @@ class TestAnthropicProvider:
 # -- Google provider ---------------------------------------------------------
 
 _GEMINI_RESPONSE = {
-    "candidates": [{
-        "content": {"parts": [{"text": "Hello!"}]},
-        "finishReason": "STOP",
-    }],
+    "candidates": [
+        {
+            "content": {"parts": [{"text": "Hello!"}]},
+            "finishReason": "STOP",
+        }
+    ],
     "usageMetadata": {
         "promptTokenCount": 5,
         "candidatesTokenCount": 2,
@@ -156,7 +163,8 @@ class TestGoogleProvider:
 
     def test_to_openai_response(self):
         result = GoogleProvider._to_openai_response(
-            _GEMINI_RESPONSE, "gemini-2.5-flash",
+            _GEMINI_RESPONSE,
+            "gemini-2.5-flash",
         )
         assert result["choices"][0]["message"]["content"] == "Hello!"
         assert result["choices"][0]["finish_reason"] == "stop"

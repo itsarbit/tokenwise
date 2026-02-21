@@ -29,10 +29,12 @@ SAMPLE_MODELS = [
 ]
 
 _UPSTREAM_RESPONSE = {
-    "choices": [{
-        "message": {"role": "assistant", "content": "Hello!"},
-        "finish_reason": "stop",
-    }],
+    "choices": [
+        {
+            "message": {"role": "assistant", "content": "Hello!"},
+            "finish_reason": "stop",
+        }
+    ],
     "usage": {
         "prompt_tokens": 5,
         "completion_tokens": 3,
@@ -90,14 +92,18 @@ class TestChatCompletions:
         }
 
         def _chunk(delta, finish_reason=None):
-            return "data: " + json.dumps({
-                **chunk_base,
-                "choices": [{
-                    "index": 0,
-                    "delta": delta,
-                    "finish_reason": finish_reason,
-                }],
-            })
+            return "data: " + json.dumps(
+                {
+                    **chunk_base,
+                    "choices": [
+                        {
+                            "index": 0,
+                            "delta": delta,
+                            "finish_reason": finish_reason,
+                        }
+                    ],
+                }
+            )
 
         sse_lines = [
             _chunk({"role": "assistant", "content": "Hi"}),
@@ -108,7 +114,8 @@ class TestChatCompletions:
 
         mock_provider = MockProvider(stream_lines=sse_lines)
         with patch.object(
-            state.resolver, "resolve",
+            state.resolver,
+            "resolve",
             return_value=(mock_provider, "gpt-4.1-mini"),
         ):
             resp = client.post(
@@ -123,10 +130,7 @@ class TestChatCompletions:
             assert "text/event-stream" in resp.headers["content-type"]
 
             body = resp.text
-            events = [
-                evt for evt in body.strip().split("\n\n")
-                if evt.startswith("data:")
-            ]
+            events = [evt for evt in body.strip().split("\n\n") if evt.startswith("data:")]
             assert len(events) >= 2
 
             first_data = json.loads(events[0].removeprefix("data: "))
@@ -139,7 +143,8 @@ class TestChatCompletions:
         """Extra fields in the request should not cause validation errors."""
         mock_provider = MockProvider(response=_UPSTREAM_RESPONSE)
         with patch.object(
-            state.resolver, "resolve",
+            state.resolver,
+            "resolve",
             return_value=(mock_provider, "gpt-4.1-mini"),
         ):
             resp = client.post(
@@ -155,15 +160,20 @@ class TestChatCompletions:
 
     def test_auto_routing(self, client):
         """model='auto' should trigger routing."""
-        mock_provider = MockProvider(response={
-            **_UPSTREAM_RESPONSE,
-            "choices": [{
-                "message": {"role": "assistant", "content": "Hi!"},
-                "finish_reason": "stop",
-            }],
-        })
+        mock_provider = MockProvider(
+            response={
+                **_UPSTREAM_RESPONSE,
+                "choices": [
+                    {
+                        "message": {"role": "assistant", "content": "Hi!"},
+                        "finish_reason": "stop",
+                    }
+                ],
+            }
+        )
         with patch.object(
-            state.resolver, "resolve",
+            state.resolver,
+            "resolve",
             return_value=(mock_provider, "gpt-4.1-mini"),
         ):
             resp = client.post(
@@ -181,15 +191,20 @@ class TestChatCompletions:
 
     def test_passthrough_model(self, client):
         """Explicit model ID should be passed through."""
-        mock_provider = MockProvider(response={
-            **_UPSTREAM_RESPONSE,
-            "choices": [{
-                "message": {"role": "assistant", "content": "Done"},
-                "finish_reason": "stop",
-            }],
-        })
+        mock_provider = MockProvider(
+            response={
+                **_UPSTREAM_RESPONSE,
+                "choices": [
+                    {
+                        "message": {"role": "assistant", "content": "Done"},
+                        "finish_reason": "stop",
+                    }
+                ],
+            }
+        )
         with patch.object(
-            state.resolver, "resolve",
+            state.resolver,
+            "resolve",
             return_value=(mock_provider, "gpt-4.1-mini"),
         ):
             resp = client.post(

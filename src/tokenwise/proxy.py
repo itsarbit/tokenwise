@@ -163,9 +163,7 @@ async def chat_completions(
 
     models_to_try = [model_id]
     if is_auto:
-        models_to_try.extend(
-            mid for mid in _get_fallback_models(tried | {model_id})[:_MAX_RETRIES]
-        )
+        models_to_try.extend(mid for mid in _get_fallback_models(tried | {model_id})[:_MAX_RETRIES])
 
     for mid in models_to_try:
         if mid in tried:
@@ -228,9 +226,7 @@ async def _handle_streaming(
     tried: set[str] = set(state.failed_models)
     models_to_try = [model_id]
     if is_auto:
-        models_to_try.extend(
-            mid for mid in _get_fallback_models(tried | {model_id})[:_MAX_RETRIES]
-        )
+        models_to_try.extend(mid for mid in _get_fallback_models(tried | {model_id})[:_MAX_RETRIES])
 
     last_error: Exception | None = None
     messages = payload.get("messages", [])
@@ -267,11 +263,13 @@ async def _handle_streaming(
                 state.failed_models.add(mid)
                 logger.info(
                     "Model %s returned %d, trying next",
-                    mid, exc.response.status_code,
+                    mid,
+                    exc.response.status_code,
                 )
                 continue
             raise HTTPException(
-                status_code=exc.response.status_code, detail=str(exc),
+                status_code=exc.response.status_code,
+                detail=str(exc),
             )
         except HTTPException:
             raise

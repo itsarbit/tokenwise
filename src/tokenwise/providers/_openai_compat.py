@@ -77,7 +77,10 @@ class OpenAICompatibleProvider:
                 f"{self.base_url}/chat/completions",
                 headers=self._auth_headers(),
                 json=self._build_payload(
-                    model, messages, temperature, max_tokens,
+                    model,
+                    messages,
+                    temperature,
+                    max_tokens,
                 ),
             )
             resp.raise_for_status()
