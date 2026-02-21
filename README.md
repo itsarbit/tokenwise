@@ -206,7 +206,6 @@ src/tokenwise/
 
 - **OpenRouter-only** — all LLM calls go through OpenRouter. Direct provider APIs are not yet supported.
 - **Capability detection is heuristic** — model capabilities are inferred from model names, not from a canonical source.
-- **No streaming** — the proxy does not support `stream: true` yet.
 - **Linear execution** — plan steps run sequentially; parallel step execution is not yet implemented.
 - **Planner cost not budgeted** — the LLM call used to decompose the task is not deducted from the user's budget.
 

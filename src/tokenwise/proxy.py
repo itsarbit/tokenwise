@@ -10,6 +10,7 @@ from contextlib import asynccontextmanager
 
 import httpx
 from fastapi import FastAPI, HTTPException
+from starlette.responses import StreamingResponse
 
 from tokenwise.config import get_settings
 from tokenwise.models import (
@@ -110,21 +111,12 @@ def _get_fallback_models(exclude: set[str]) -> list[str]:
     return candidates
 
 
-@app.post("/v1/chat/completions")
-async def chat_completions(
+def _resolve_model_and_payload(
     request: ChatCompletionRequest,
-) -> ChatCompletionResponse:
-    """Handle chat completion requests with intelligent routing."""
+) -> tuple[str, bool, dict, dict[str, str]]:
+    """Resolve model ID, build payload and headers."""
     settings = get_settings()
 
-    # Streaming is not yet supported
-    if request.stream:
-        raise HTTPException(
-            status_code=400,
-            detail="Streaming is not supported yet. Set stream=false.",
-        )
-
-    # Determine which model to use
     is_auto = request.model == "auto" or request.model.startswith("tokenwise/")
 
     if is_auto:
@@ -144,7 +136,6 @@ async def chat_completions(
     else:
         model_id = request.model
 
-    # Build upstream request
     headers: dict[str, str] = {"Content-Type": "application/json"}
     if settings.openrouter_api_key:
         headers["Authorization"] = f"Bearer {settings.openrouter_api_key}"
@@ -158,7 +149,20 @@ async def chat_completions(
     if request.max_tokens is not None:
         payload["max_tokens"] = request.max_tokens
 
-    # Try the primary model, then fallback if auto-routed
+    return model_id, is_auto, payload, headers
+
+
+@app.post("/v1/chat/completions", response_model=None)
+async def chat_completions(
+    request: ChatCompletionRequest,
+) -> ChatCompletionResponse | StreamingResponse:
+    """Handle chat completion requests with intelligent routing."""
+    model_id, is_auto, payload, headers = _resolve_model_and_payload(request)
+
+    if request.stream:
+        return await _handle_streaming(model_id, is_auto, payload, headers)
+
+    # --- non-streaming path (unchanged) ---
     tried: set[str] = set(state.failed_models)
     last_error: Exception | None = None
 
@@ -186,12 +190,10 @@ async def chat_completions(
         except Exception as e:
             raise HTTPException(status_code=502, detail=f"Upstream error: {e}")
     else:
-        # All models failed
         if isinstance(last_error, httpx.HTTPStatusError):
             raise HTTPException(status_code=last_error.response.status_code, detail=str(last_error))
         raise HTTPException(status_code=502, detail="All models failed")
 
-    # Parse response and return in OpenAI format
     choices = []
     for i, choice in enumerate(data.get("choices", [])):
         msg = choice.get("message", {})
@@ -220,6 +222,79 @@ async def chat_completions(
         choices=choices,
         usage=usage,
     )
+
+
+async def _handle_streaming(
+    model_id: str,
+    is_auto: bool,
+    payload: dict,
+    headers: dict[str, str],
+) -> StreamingResponse:
+    """Forward a streaming request to upstream, retrying on failure."""
+    settings = get_settings()
+    payload["stream"] = True
+
+    tried: set[str] = set(state.failed_models)
+    models_to_try = [model_id]
+    if is_auto:
+        models_to_try.extend(
+            mid for mid in _get_fallback_models(tried | {model_id})[:_MAX_RETRIES]
+        )
+
+    last_error: Exception | None = None
+
+    for mid in models_to_try:
+        if mid in tried:
+            continue
+        tried.add(mid)
+        payload["model"] = mid
+        url = f"{settings.openrouter_base_url}/chat/completions"
+
+        try:
+            resp = await state.http_client.send(
+                state.http_client.build_request(
+                    "POST", url, headers=headers, json=payload,
+                ),
+                stream=True,
+            )
+            if resp.status_code in _RETRYABLE_CODES:
+                await resp.aclose()
+                state.failed_models.add(mid)
+                logger.info("Model %s returned %d, trying next", mid, resp.status_code)
+                last_error = httpx.HTTPStatusError(
+                    f"HTTP {resp.status_code}", request=resp.request, response=resp,
+                )
+                continue
+            if resp.status_code >= 400:
+                await resp.aclose()
+                detail = f"Upstream HTTP {resp.status_code}"
+                raise HTTPException(status_code=resp.status_code, detail=detail)
+
+            # Success — wrap in StreamingResponse
+            async def _generate(response: httpx.Response):  # noqa: ANN202
+                try:
+                    async for line in response.aiter_lines():
+                        if line:
+                            yield f"{line}\n\n"
+                            if line.strip() == "data: [DONE]":
+                                break
+                finally:
+                    await response.aclose()
+
+            return StreamingResponse(
+                _generate(resp),
+                media_type="text/event-stream",
+            )
+        except HTTPException:
+            raise
+        except Exception as e:
+            last_error = e
+            logger.info("Model %s failed: %s, trying next", mid, e)
+            continue
+
+    if isinstance(last_error, httpx.HTTPStatusError):
+        raise HTTPException(status_code=last_error.response.status_code, detail=str(last_error))
+    raise HTTPException(status_code=502, detail="All models failed")
 
 
 @app.get("/health")

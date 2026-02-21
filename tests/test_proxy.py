@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from unittest.mock import patch
 
 import pytest
@@ -67,17 +68,62 @@ class TestListModels:
 
 
 class TestChatCompletions:
-    def test_rejects_streaming(self, client):
-        resp = client.post(
-            "/v1/chat/completions",
-            json={
-                "model": "openai/gpt-4.1-mini",
-                "messages": [{"role": "user", "content": "Hi"}],
-                "stream": True,
-            },
-        )
-        assert resp.status_code == 400
-        assert "stream" in resp.json()["detail"].lower()
+    def test_streaming_response(self, client):
+        """stream=true should return SSE chunks."""
+        chunk_base = {
+            "id": "ch-1",
+            "object": "chat.completion.chunk",
+            "created": 0,
+            "model": "openai/gpt-4.1-mini",
+        }
+        def _chunk(delta, finish_reason=None):
+            return "data: " + json.dumps({
+                **chunk_base,
+                "choices": [{
+                    "index": 0,
+                    "delta": delta,
+                    "finish_reason": finish_reason,
+                }],
+            })
+
+        sse_lines = [
+            _chunk({"role": "assistant", "content": "Hi"}),
+            _chunk({"content": "!"}),
+            _chunk({}, finish_reason="stop"),
+            "data: [DONE]",
+        ]
+        mock_stream = MockStreamResponse(200, sse_lines)
+
+        with patch.object(
+            state.http_client, "build_request", return_value="fake_req",
+        ):
+            with patch.object(
+                state.http_client, "send",
+                new=AsyncMock(return_value=mock_stream),
+            ):
+                resp = client.post(
+                    "/v1/chat/completions",
+                    json={
+                        "model": "openai/gpt-4.1-mini",
+                        "messages": [{"role": "user", "content": "Hi"}],
+                        "stream": True,
+                    },
+                )
+                assert resp.status_code == 200
+                assert "text/event-stream" in resp.headers["content-type"]
+
+                body = resp.text
+                events = [
+                    evt for evt in body.strip().split("\n\n")
+                    if evt.startswith("data:")
+                ]
+                assert len(events) >= 2
+
+                first_data = json.loads(events[0].removeprefix("data: "))
+                assert first_data["object"] == "chat.completion.chunk"
+                assert first_data["choices"][0]["delta"]["content"] == "Hi"
+
+                assert events[-1].strip() == "data: [DONE]"
 
     def test_ignores_extra_fields(self, client):
         """Extra fields in the request should not cause validation errors."""
@@ -214,3 +260,19 @@ class AsyncMock:
     async def __call__(self, *args, **kwargs):
         self.call_args = (args, kwargs)
         return self._return_value
+
+
+class MockStreamResponse:
+    """Mock httpx streaming response that yields SSE lines."""
+
+    def __init__(self, status_code: int, lines: list[str]):
+        self.status_code = status_code
+        self._lines = lines
+        self.request = type("Req", (), {"url": "http://test"})()
+
+    async def aiter_lines(self):
+        for line in self._lines:
+            yield line
+
+    async def aclose(self):
+        pass

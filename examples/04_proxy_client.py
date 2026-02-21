@@ -170,6 +170,44 @@ def demo_budget_constrained(client: httpx.Client) -> None:
 
     console.print(f"  Model used: [bold]{model_used}[/bold] (best model within $0.01 budget)")
     console.print(Panel(content.strip(), title="Response", border_style="green"))
+    console.print()
+
+
+def demo_streaming(client: httpx.Client) -> None:
+    """Send a streaming request and print tokens as they arrive."""
+    console.print('[bold yellow]5. POST /v1/chat/completions — stream: true[/bold yellow]')
+
+    console.print("  Streaming tokens: ", end="")
+    with client.stream(
+        "POST",
+        f"{BASE_URL}/v1/chat/completions",
+        json={
+            "model": "auto",
+            "messages": [
+                {"role": "user", "content": "Count from 1 to 5, one number per line."}
+            ],
+            "max_tokens": 100,
+            "stream": True,
+        },
+        timeout=60.0,
+    ) as resp:
+        resp.raise_for_status()
+        import json
+
+        for line in resp.iter_lines():
+            if not line or not line.startswith("data:"):
+                continue
+            data_str = line.removeprefix("data:").strip()
+            if data_str == "[DONE]":
+                break
+            chunk = json.loads(data_str)
+            token = chunk["choices"][0]["delta"].get("content", "")
+            if token:
+                console.print(token, end="")
+
+    console.print()
+    console.print("  [dim](stream complete)[/dim]")
+    console.print()
 
 
 def main() -> None:
@@ -184,6 +222,7 @@ def main() -> None:
         demo_auto_routing(client)
         demo_cheapest_strategy(client)
         demo_budget_constrained(client)
+        demo_streaming(client)
 
     console.print("\n[dim]Proxy runs in a daemon thread and exits with this process.[/dim]\n")
 

@@ -148,3 +148,28 @@ class ChatCompletionResponse(BaseModel):
     model: str = ""
     choices: list[ChatCompletionChoice] = Field(default_factory=list)
     usage: Usage = Field(default_factory=Usage)
+
+
+class DeltaMessage(BaseModel):
+    """Delta content in a streaming chunk."""
+
+    role: str | None = None
+    content: str | None = None
+
+
+class ChunkChoice(BaseModel):
+    """Single choice in a streaming chunk."""
+
+    index: int = 0
+    delta: DeltaMessage = Field(default_factory=DeltaMessage)
+    finish_reason: str | None = None
+
+
+class ChatCompletionChunk(BaseModel):
+    """OpenAI-compatible streaming chunk."""
+
+    id: str = ""
+    object: str = "chat.completion.chunk"
+    created: int = 0
+    model: str = ""
+    choices: list[ChunkChoice] = Field(default_factory=list)
