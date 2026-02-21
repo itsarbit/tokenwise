@@ -3,8 +3,8 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "tokenwise"
-version = "0.2.0"
+name = "tokenwise-llm"
+version = "0.3.0"
 description = "Intelligent LLM task planner — decompose tasks, route to optimal models, enforce budgets"
 readme = "README.md"
 license = "MIT"
