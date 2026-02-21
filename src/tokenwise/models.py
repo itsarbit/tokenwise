@@ -52,6 +52,10 @@ class Step(BaseModel):
     estimated_cost: float = Field(default=0.0, description="Estimated cost in USD")
     depends_on: list[int] = Field(default_factory=list, description="IDs of prerequisite steps")
     prompt_template: str = Field(default="", description="Prompt to send to the model")
+    required_capabilities: list[str] = Field(
+        default_factory=list,
+        description="Capabilities this step needs (e.g. ['code', 'reasoning'])",
+    )
 
 
 class Plan(BaseModel):
@@ -129,6 +133,9 @@ class StepResult(BaseModel):
     actual_cost: float = 0.0
     success: bool = True
     error: str | None = None
+    http_status_code: int | None = Field(
+        default=None, description="HTTP status code from the provider, if the error was HTTP-based"
+    )
     escalated: bool = Field(
         default=False, description="Whether this step was retried on a stronger model"
     )

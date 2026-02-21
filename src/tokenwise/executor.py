@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import logging
 
+import httpx
+
 from tokenwise.models import CostLedger, ModelInfo, ModelTier, Plan, PlanResult, Step, StepResult
 from tokenwise.providers import ProviderResolver
 from tokenwise.registry import ModelRegistry
@@ -79,7 +81,7 @@ class Executor:
                     prompt=prompt,
                     budget_remaining=remaining,
                 )
-                if not step_result.success and self._is_model_error(step_result.error):
+                if not step_result.success and self._is_model_error(step_result):
                     self._failed_models.add(step.model_id)
 
             # Record the initial attempt in the ledger
@@ -168,6 +170,16 @@ class Executor:
                 success=True,
             )
 
+        except httpx.HTTPStatusError as e:
+            status = e.response.status_code
+            logger.error("Step %d failed with model %s: HTTP %d", step_id, model_id, status)
+            return StepResult(
+                step_id=step_id,
+                model_id=model_id,
+                success=False,
+                error=str(e),
+                http_status_code=status,
+            )
         except Exception as e:
             logger.error("Step %d failed with model %s: %s", step_id, model_id, e)
             return StepResult(
@@ -177,11 +189,11 @@ class Executor:
                 error=str(e),
             )
 
-    def _is_model_error(self, error: str | None) -> bool:
-        """Check if an error indicates the model is unusable (not a transient issue)."""
-        if not error:
-            return False
-        return any(f"'{code}" in error or f"{code}" in error for code in _MODEL_UNUSABLE_CODES)
+    def _is_model_error(self, step_result: StepResult) -> bool:
+        """Check if a step failure indicates the model is unusable (not transient)."""
+        if step_result.http_status_code is not None:
+            return step_result.http_status_code in _MODEL_UNUSABLE_CODES
+        return False
 
     def _get_fallback_candidates(
         self, exclude: set[str], budget_remaining: float, step: Step
@@ -191,20 +203,21 @@ class Executor:
         Looks up the failed model's tier and only considers equal or stronger
         tiers. Within tiers, stronger tiers come first; within the same tier,
         models are sorted by price descending (more expensive = likely higher
-        quality). Also filters by the failed model's capabilities.
+        quality). Filters by the step's required_capabilities when available,
+        falling back to inferring from the failed model's capabilities.
         """
-        # Determine the failed model's tier and capabilities for filtering
+        # Determine the failed model's tier
         failed_model = self.registry.get_model(step.model_id)
         failed_tier = failed_model.tier if failed_model else ModelTier.BUDGET
         failed_strength = _TIER_STRENGTH.get(failed_tier, 0)
-        # Use first capability of failed model for filtering (if available)
-        required_cap = None
-        if failed_model and failed_model.capabilities:
-            # Pick the first non-"general" capability, or "general" if that's all there is
-            for cap in failed_model.capabilities:
-                if cap != "general":
-                    required_cap = cap
-                    break
+
+        # Determine required capabilities: prefer step's explicit list,
+        # fall back to inferring from the failed model
+        required_caps: set[str] = set()
+        if step.required_capabilities:
+            required_caps = {c for c in step.required_capabilities if c != "general"}
+        elif failed_model and failed_model.capabilities:
+            required_caps = {c for c in failed_model.capabilities if c != "general"}
 
         # Collect candidates from tiers >= failed tier, stronger tiers first
         stronger: list[ModelInfo] = []
@@ -218,8 +231,8 @@ class Executor:
             for m in models:
                 if m.id in exclude or m.input_price <= 0:
                     continue
-                # Capability filtering
-                if required_cap and required_cap not in m.capabilities:
+                # Capability filtering: candidate must have ALL required capabilities
+                if required_caps and not required_caps.issubset(set(m.capabilities)):
                     continue
                 est = m.estimate_cost(step.estimated_input_tokens, step.estimated_output_tokens)
                 if est > budget_remaining:
@@ -228,6 +241,24 @@ class Executor:
                     stronger.append(m)
                 else:
                     same_tier.append(m)
+
+        # If strict capability filtering eliminated everything, relax and retry
+        if not (stronger or same_tier) and required_caps:
+            for tier in [ModelTier.FLAGSHIP, ModelTier.MID, ModelTier.BUDGET]:
+                tier_strength = _TIER_STRENGTH[tier]
+                if tier_strength < failed_strength:
+                    continue
+                models = self.registry.find_models(tier=tier)
+                for m in models:
+                    if m.id in exclude or m.input_price <= 0:
+                        continue
+                    est = m.estimate_cost(step.estimated_input_tokens, step.estimated_output_tokens)
+                    if est > budget_remaining:
+                        continue
+                    if tier_strength > failed_strength:
+                        stronger.append(m)
+                    else:
+                        same_tier.append(m)
 
         # Sort each group by price descending (more expensive = likely better)
         stronger.sort(key=lambda m: m.input_price, reverse=True)
@@ -281,7 +312,7 @@ class Executor:
             if result.success:
                 return result
             # If this model is also unusable, remember it and continue
-            if self._is_model_error(result.error):
+            if self._is_model_error(result):
                 self._failed_models.add(model.id)
                 logger.info("Model %s unavailable, trying next", model.id)
                 continue

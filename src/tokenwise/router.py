@@ -119,8 +119,8 @@ class Router:
                 candidates = affordable
             elif budget_strict and candidates:
                 # Nothing affordable and strict mode — raise with helpful info
-                cheapest = min(candidates, key=lambda m: m.input_price)
                 est_in, est_out = _TOKEN_ESTIMATES.get(complexity, (1000, 500))
+                cheapest = min(candidates, key=lambda m: m.estimate_cost(est_in, est_out))
                 cheapest_cost = cheapest.estimate_cost(est_in, est_out)
                 raise ValueError(
                     f"Budget ${budget:.6f} is too tight. Cheapest option is "

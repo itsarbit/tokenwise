@@ -216,6 +216,11 @@ class Planner:
             cost = model.estimate_cost(est_in, est_out)
             remaining_budget -= cost
 
+            # Build required_capabilities from the decomposed step
+            required_caps: list[str] = []
+            if capability and capability != "general":
+                required_caps.append(capability)
+
             steps.append(
                 Step(
                     id=i + 1,
@@ -225,6 +230,7 @@ class Planner:
                     estimated_output_tokens=est_out,
                     estimated_cost=cost,
                     depends_on=[i] if i > 0 else [],
+                    required_capabilities=required_caps,
                 )
             )
 

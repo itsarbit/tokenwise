@@ -225,9 +225,58 @@ class TestExecutor:
         candidates = executor._get_fallback_candidates(
             exclude={"openai/o3"}, budget_remaining=100.0, step=step
         )
-        # All candidates should have at least the "code" capability (first non-general cap)
+        # All candidates should have at least the "code" capability (inferred from failed model)
         for m in candidates:
             assert "code" in m.capabilities
+
+    def test_fallback_uses_step_required_capabilities(self, sample_registry: ModelRegistry):
+        """When step has required_capabilities, use those instead of inferring."""
+        executor = Executor(registry=sample_registry)
+        step = Step(
+            id=1,
+            description="Reasoning task",
+            model_id="openai/gpt-4.1-mini",  # BUDGET tier
+            estimated_cost=0.001,
+            required_capabilities=["reasoning"],
+        )
+        candidates = executor._get_fallback_candidates(
+            exclude={"openai/gpt-4.1-mini"}, budget_remaining=100.0, step=step
+        )
+        # All candidates should have "reasoning" capability
+        for m in candidates:
+            assert "reasoning" in m.capabilities
+
+    def test_is_model_error_uses_status_code(self, sample_registry: ModelRegistry):
+        """_is_model_error checks http_status_code, not string matching."""
+        executor = Executor(registry=sample_registry)
+        # 404 is a model-unusable code
+        result_404 = StepResult(
+            step_id=1,
+            model_id="test/model",
+            success=False,
+            error="Not Found",
+            http_status_code=404,
+        )
+        assert executor._is_model_error(result_404) is True
+
+        # 500 is transient, not model-unusable
+        result_500 = StepResult(
+            step_id=1,
+            model_id="test/model",
+            success=False,
+            error="Server Error",
+            http_status_code=500,
+        )
+        assert executor._is_model_error(result_500) is False
+
+        # No HTTP status code — not a model error
+        result_none = StepResult(
+            step_id=1,
+            model_id="test/model",
+            success=False,
+            error="timeout",
+        )
+        assert executor._is_model_error(result_none) is False
 
     def test_ledger_populated_after_execution(self, sample_registry: ModelRegistry):
         """Ledger should have entries after executing a plan."""
