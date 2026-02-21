@@ -21,6 +21,7 @@ from tokenwise.models import (
     ModelTier,
     Usage,
 )
+from tokenwise.providers import ProviderResolver
 from tokenwise.registry import ModelRegistry
 from tokenwise.router import Router
 
@@ -38,6 +39,7 @@ class _State:
     http_client: httpx.AsyncClient
     registry: ModelRegistry
     router: Router
+    resolver: ProviderResolver
     failed_models: set[str]
 
 
@@ -50,6 +52,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     state.http_client = httpx.AsyncClient(timeout=120.0)
     state.registry = ModelRegistry()
     state.router = Router(state.registry)
+    state.resolver = ProviderResolver()
     state.failed_models = set()
     yield
     await state.http_client.aclose()
@@ -85,19 +88,16 @@ async def list_models() -> dict:
 async def _forward_to_upstream(
     model_id: str,
     payload: dict,
-    headers: dict[str, str],
 ) -> dict:
-    """Forward a request to the upstream LLM provider. Returns parsed JSON."""
-    settings = get_settings()
-    payload["model"] = model_id
-
-    resp = await state.http_client.post(
-        f"{settings.openrouter_base_url}/chat/completions",
-        headers=headers,
-        json=payload,
+    """Forward a request to the resolved LLM provider. Returns parsed JSON."""
+    provider, provider_model = state.resolver.resolve(model_id)
+    messages = payload.get("messages", [])
+    return await provider.achat_completion(
+        model=provider_model,
+        messages=messages,
+        temperature=payload.get("temperature"),
+        max_tokens=payload.get("max_tokens"),
     )
-    resp.raise_for_status()
-    return resp.json()
 
 
 def _get_fallback_models(exclude: set[str]) -> list[str]:
@@ -113,8 +113,8 @@ def _get_fallback_models(exclude: set[str]) -> list[str]:
 
 def _resolve_model_and_payload(
     request: ChatCompletionRequest,
-) -> tuple[str, bool, dict, dict[str, str]]:
-    """Resolve model ID, build payload and headers."""
+) -> tuple[str, bool, dict]:
+    """Resolve model ID and build payload."""
     settings = get_settings()
 
     is_auto = request.model == "auto" or request.model.startswith("tokenwise/")
@@ -136,12 +136,7 @@ def _resolve_model_and_payload(
     else:
         model_id = request.model
 
-    headers: dict[str, str] = {"Content-Type": "application/json"}
-    if settings.openrouter_api_key:
-        headers["Authorization"] = f"Bearer {settings.openrouter_api_key}"
-
     payload: dict = {
-        "model": model_id,
         "messages": [{"role": m.role, "content": m.content} for m in request.messages],
     }
     if request.temperature is not None:
@@ -149,7 +144,7 @@ def _resolve_model_and_payload(
     if request.max_tokens is not None:
         payload["max_tokens"] = request.max_tokens
 
-    return model_id, is_auto, payload, headers
+    return model_id, is_auto, payload
 
 
 @app.post("/v1/chat/completions", response_model=None)
@@ -157,12 +152,12 @@ async def chat_completions(
     request: ChatCompletionRequest,
 ) -> ChatCompletionResponse | StreamingResponse:
     """Handle chat completion requests with intelligent routing."""
-    model_id, is_auto, payload, headers = _resolve_model_and_payload(request)
+    model_id, is_auto, payload = _resolve_model_and_payload(request)
 
     if request.stream:
-        return await _handle_streaming(model_id, is_auto, payload, headers)
+        return await _handle_streaming(model_id, is_auto, payload)
 
-    # --- non-streaming path (unchanged) ---
+    # --- non-streaming path ---
     tried: set[str] = set(state.failed_models)
     last_error: Exception | None = None
 
@@ -177,7 +172,7 @@ async def chat_completions(
             continue
         tried.add(mid)
         try:
-            data = await _forward_to_upstream(mid, payload, headers)
+            data = await _forward_to_upstream(mid, payload)
             model_id = mid
             break
         except httpx.HTTPStatusError as e:
@@ -228,12 +223,8 @@ async def _handle_streaming(
     model_id: str,
     is_auto: bool,
     payload: dict,
-    headers: dict[str, str],
 ) -> StreamingResponse:
-    """Forward a streaming request to upstream, retrying on failure."""
-    settings = get_settings()
-    payload["stream"] = True
-
+    """Forward a streaming request via the provider abstraction."""
     tried: set[str] = set(state.failed_models)
     models_to_try = [model_id]
     if is_auto:
@@ -242,48 +233,45 @@ async def _handle_streaming(
         )
 
     last_error: Exception | None = None
+    messages = payload.get("messages", [])
 
     for mid in models_to_try:
         if mid in tried:
             continue
         tried.add(mid)
-        payload["model"] = mid
-        url = f"{settings.openrouter_base_url}/chat/completions"
 
         try:
-            resp = await state.http_client.send(
-                state.http_client.build_request(
-                    "POST", url, headers=headers, json=payload,
-                ),
-                stream=True,
+            provider, provider_model = state.resolver.resolve(mid)
+            sse_gen = provider.astream_completion(
+                model=provider_model,
+                messages=messages,
+                temperature=payload.get("temperature"),
+                max_tokens=payload.get("max_tokens"),
             )
-            if resp.status_code in _RETRYABLE_CODES:
-                await resp.aclose()
-                state.failed_models.add(mid)
-                logger.info("Model %s returned %d, trying next", mid, resp.status_code)
-                last_error = httpx.HTTPStatusError(
-                    f"HTTP {resp.status_code}", request=resp.request, response=resp,
-                )
-                continue
-            if resp.status_code >= 400:
-                await resp.aclose()
-                detail = f"Upstream HTTP {resp.status_code}"
-                raise HTTPException(status_code=resp.status_code, detail=detail)
 
-            # Success — wrap in StreamingResponse
-            async def _generate(response: httpx.Response):  # noqa: ANN202
-                try:
-                    async for line in response.aiter_lines():
-                        if line:
-                            yield f"{line}\n\n"
-                            if line.strip() == "data: [DONE]":
-                                break
-                finally:
-                    await response.aclose()
+            # Wrap the provider's async generator to add SSE framing
+            async def _generate(gen):  # type: ignore[no-untyped-def]  # noqa: ANN202
+                async for line in gen:
+                    if line:
+                        yield f"{line}\n\n"
+                        if line.strip() == "data: [DONE]":
+                            break
 
             return StreamingResponse(
-                _generate(resp),
+                _generate(sse_gen),
                 media_type="text/event-stream",
+            )
+        except httpx.HTTPStatusError as exc:
+            last_error = exc
+            if exc.response.status_code in _RETRYABLE_CODES:
+                state.failed_models.add(mid)
+                logger.info(
+                    "Model %s returned %d, trying next",
+                    mid, exc.response.status_code,
+                )
+                continue
+            raise HTTPException(
+                status_code=exc.response.status_code, detail=str(exc),
             )
         except HTTPException:
             raise
@@ -293,7 +281,10 @@ async def _handle_streaming(
             continue
 
     if isinstance(last_error, httpx.HTTPStatusError):
-        raise HTTPException(status_code=last_error.response.status_code, detail=str(last_error))
+        raise HTTPException(
+            status_code=last_error.response.status_code,
+            detail=str(last_error),
+        )
     raise HTTPException(status_code=502, detail="All models failed")
 
 

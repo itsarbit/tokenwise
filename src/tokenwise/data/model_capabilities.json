@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "families": [
+    {"prefix": "openai/o3-mini", "capabilities": ["reasoning", "math", "code"], "tier": "mid"},
+    {"prefix": "openai/o3", "capabilities": ["reasoning", "math", "code"], "tier": "flagship"},
+    {"prefix": "openai/o4-mini", "capabilities": ["reasoning", "math", "code"], "tier": "mid"},
+    {"prefix": "openai/gpt-4.1-nano", "capabilities": ["general", "code"], "tier": "budget"},
+    {"prefix": "openai/gpt-4.1-mini", "capabilities": ["general", "code", "reasoning"], "tier": "budget"},
+    {"prefix": "openai/gpt-4.1", "capabilities": ["general", "code", "reasoning"], "tier": "mid"},
+    {"prefix": "anthropic/claude-sonnet-4", "capabilities": ["general", "code", "reasoning", "creative"], "tier": "mid"},
+    {"prefix": "anthropic/claude-opus-4", "capabilities": ["general", "code", "reasoning", "creative"], "tier": "flagship"},
+    {"prefix": "anthropic/claude-haiku", "capabilities": ["general", "code"], "tier": "budget"},
+    {"prefix": "google/gemini-2.5-pro", "capabilities": ["general", "code", "reasoning"], "tier": "mid"},
+    {"prefix": "google/gemini-2.5-flash", "capabilities": ["general", "code"], "tier": "budget"},
+    {"prefix": "deepseek/deepseek-r1", "capabilities": ["reasoning", "math", "code"], "tier": "mid"},
+    {"prefix": "deepseek/deepseek-chat", "capabilities": ["general", "code"], "tier": "budget"},
+    {"prefix": "meta-llama/llama-4", "capabilities": ["general", "code"], "tier": "budget"},
+    {"prefix": "mistralai/mistral-large", "capabilities": ["general", "code", "reasoning"], "tier": "mid"},
+    {"prefix": "mistralai/codestral", "capabilities": ["code"], "tier": "mid"},
+    {"prefix": "qwen/qwen3", "capabilities": ["general", "code"], "tier": "budget"}
+  ]
+}

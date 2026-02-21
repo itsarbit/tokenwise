@@ -15,7 +15,7 @@
 
 Existing LLM routers (RouteLLM, LLMRouter, Not Diamond) only do single-query routing: pick one model per request. TokenWise goes further — it **plans**: decomposes complex tasks into subtasks, assigns the right model to each step based on cost/quality/capability, enforces a token budget, and retries with a stronger model on failure.
 
-> **Note:** TokenWise v0.1 uses [OpenRouter](https://openrouter.ai) as its model gateway. All model discovery, pricing, and LLM calls go through the OpenRouter API. You will need an OpenRouter API key to use TokenWise. Support for direct provider APIs (OpenAI, Anthropic, etc.) is planned for a future release.
+> **Note:** TokenWise uses [OpenRouter](https://openrouter.ai) as the default model gateway for model discovery and routing. You can also use direct provider APIs (OpenAI, Anthropic, Google) by setting the corresponding API keys — when a direct key is available, requests for that provider bypass OpenRouter automatically.
 
 ## Features
 
@@ -169,7 +169,10 @@ TokenWise reads configuration from environment variables and an optional config 
 
 | Variable | Description | Default |
 |---|---|---|
-| `OPENROUTER_API_KEY` | **Required.** Your OpenRouter API key | — |
+| `OPENROUTER_API_KEY` | OpenRouter API key (routes all providers) | — |
+| `OPENAI_API_KEY` | Direct OpenAI API key | — |
+| `ANTHROPIC_API_KEY` | Direct Anthropic API key | — |
+| `GOOGLE_API_KEY` | Direct Google AI API key | — |
 | `OPENROUTER_BASE_URL` | OpenRouter API base URL | `https://openrouter.ai/api/v1` |
 | `TOKENWISE_DEFAULT_STRATEGY` | Default routing strategy | `balanced` |
 | `TOKENWISE_DEFAULT_BUDGET` | Default budget in USD | `1.00` |
@@ -192,20 +195,26 @@ planner_model: openai/gpt-4.1-mini
 
 ```
 src/tokenwise/
-├── models.py      # Pydantic data models (ModelInfo, Plan, Step, etc.)
-├── config.py      # Settings from env vars and config file
-├── registry.py    # ModelRegistry — fetches/caches models from OpenRouter
-├── router.py      # Router — picks best model for a single query
-├── planner.py     # Planner — decomposes tasks, assigns models per step
-├── executor.py    # Executor — runs plans, tracks spend, escalates on failure
-├── cli.py         # Typer CLI (models, route, plan, serve)
-└── proxy.py       # FastAPI OpenAI-compatible proxy server
+├── models.py          # Pydantic data models (ModelInfo, Plan, Step, etc.)
+├── config.py          # Settings from env vars and config file
+├── registry.py        # ModelRegistry — fetches/caches models from OpenRouter
+├── router.py          # Router — picks best model for a single query
+├── planner.py         # Planner — decomposes tasks, assigns models per step
+├── executor.py        # Executor — runs plans, tracks spend, escalates on failure
+├── cli.py             # Typer CLI (models, route, plan, serve)
+├── proxy.py           # FastAPI OpenAI-compatible proxy server
+├── providers/         # LLM provider adapters
+│   ├── openrouter.py  #   OpenRouter (default, routes via openrouter.ai)
+│   ├── openai.py      #   Direct OpenAI API
+│   ├── anthropic.py   #   Direct Anthropic Messages API
+│   ├── google.py      #   Direct Google Gemini API
+│   └── resolver.py    #   Maps model IDs → provider instances
+└── data/
+    └── model_capabilities.json  # Curated model family → capabilities mapping
 ```
 
 ## Known Limitations (v0.1)
 
-- **OpenRouter-only** — all LLM calls go through OpenRouter. Direct provider APIs are not yet supported.
-- **Capability detection is heuristic** — model capabilities are inferred from model names, not from a canonical source.
 - **Linear execution** — plan steps run sequentially; parallel step execution is not yet implemented.
 - **Planner cost not budgeted** — the LLM call used to decompose the task is not deducted from the user's budget.
 

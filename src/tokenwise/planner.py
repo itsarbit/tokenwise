@@ -7,10 +7,9 @@ import logging
 import re
 from typing import Any
 
-import httpx
-
 from tokenwise.config import MissingAPIKeyError, get_settings
 from tokenwise.models import ModelInfo, Plan, Step
+from tokenwise.providers import ProviderResolver
 from tokenwise.registry import ModelRegistry
 from tokenwise.router import Router
 
@@ -52,6 +51,7 @@ class Planner:
     ) -> None:
         self.registry = registry or ModelRegistry()
         self.router = router or Router(self.registry)
+        self._resolver = ProviderResolver()
 
     def plan(
         self,
@@ -98,30 +98,22 @@ class Planner:
     def _decompose_task(self, task: str) -> list[dict[str, Any]]:
         """Call the planner LLM to decompose a task into subtasks."""
         settings = get_settings()
-        api_key = settings.require_api_key()
         prompt = _DECOMPOSITION_PROMPT.format(task=task)
 
-        headers: dict[str, str] = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {api_key}",
-        }
-
         try:
-            resp = httpx.post(
-                f"{settings.openrouter_base_url}/chat/completions",
-                headers=headers,
-                json={
-                    "model": settings.planner_model,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "temperature": 0.2,
-                    "max_tokens": 2000,
-                },
+            provider, provider_model = self._resolver.resolve(
+                settings.planner_model,
+            )
+            data = provider.chat_completion(
+                model=provider_model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.2,
+                max_tokens=2000,
                 timeout=60.0,
             )
-            resp.raise_for_status()
-            content = resp.json()["choices"][0]["message"]["content"]
+            content = data["choices"][0]["message"]["content"]
             return self._parse_steps_json(content)
-        except (MissingAPIKeyError, httpx.HTTPStatusError):
+        except MissingAPIKeyError:
             raise
         except Exception as e:
             logger.warning("LLM decomposition failed (%s), using fallback", e)

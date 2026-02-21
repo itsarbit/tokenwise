@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import time
+from functools import lru_cache
 from pathlib import Path
 
 import httpx
@@ -11,34 +13,91 @@ import yaml
 from tokenwise.config import get_settings
 from tokenwise.models import ModelInfo, ModelTier
 
-# Keyword-based capability detection
-_CAPABILITY_KEYWORDS: dict[str, list[str]] = {
-    "code": ["code", "coder", "codestral", "deepseek-coder", "starcoder"],
-    "reasoning": ["o1", "o3", "o4", "reasoning", "think", "r1"],
-    "vision": ["vision", "4o", "gpt-4.1", "claude-3", "claude-4", "gemini"],
-    "math": ["math", "o1", "o3", "o4"],
-    "creative": ["claude", "gpt-4", "gemini"],
+# ---------------------------------------------------------------------------
+# Curated capability mapping
+# ---------------------------------------------------------------------------
+
+@lru_cache(maxsize=1)
+def _load_capability_map() -> list[dict]:
+    """Load the curated model-family capability mapping from package data."""
+    data_path = Path(__file__).parent / "data" / "model_capabilities.json"
+    with open(data_path) as f:
+        return json.load(f)["families"]
+
+
+def _match_family(model_id: str) -> dict | None:
+    """Find the first matching family entry for a model ID via prefix match."""
+    families = _load_capability_map()
+    model_lower = model_id.lower()
+    for entry in families:
+        if model_lower.startswith(entry["prefix"]):
+            return entry
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Fallback heuristics (used only when no curated match)
+# ---------------------------------------------------------------------------
+
+_FALLBACK_KEYWORDS: dict[str, list[str]] = {
+    "code": ["code", "coder", "codestral", "starcoder"],
+    "reasoning": ["reasoning", "think"],
+    "math": ["math"],
 }
 
 
-def _infer_capabilities(model_id: str) -> list[str]:
-    """Infer capabilities from the model ID using keyword heuristics."""
-    caps = []
+def _infer_capabilities_fallback(model_id: str) -> list[str]:
+    """Last-resort keyword inference for models not in the curated mapping."""
+    caps: list[str] = []
     model_lower = model_id.lower()
-    for cap, keywords in _CAPABILITY_KEYWORDS.items():
+    for cap, keywords in _FALLBACK_KEYWORDS.items():
         if any(kw in model_lower for kw in keywords):
             caps.append(cap)
-    return caps
+    return caps if caps else ["general"]
 
 
-def _infer_tier(input_price: float) -> ModelTier:
-    """Infer tier from input price per million tokens."""
+def _infer_tier_from_price(input_price: float) -> ModelTier:
+    """Fallback tier inference from input price per million tokens."""
     if input_price >= 5.0:
         return ModelTier.FLAGSHIP
     if input_price >= 0.5:
         return ModelTier.MID
     return ModelTier.BUDGET
 
+
+# ---------------------------------------------------------------------------
+# API metadata helpers
+# ---------------------------------------------------------------------------
+
+def _has_vision(api_data: dict) -> bool:
+    """Check if the model supports image input based on OpenRouter modality."""
+    modality = api_data.get("architecture", {}).get("modality", "")
+    return "image" in modality.lower()
+
+
+def _apply_overrides(
+    model_id: str,
+    capabilities: list[str],
+    tier: ModelTier,
+) -> tuple[list[str], ModelTier]:
+    """Apply user-configured capability/tier overrides if present."""
+    settings = get_settings()
+    overrides = getattr(settings, "model_overrides", None)
+    if not overrides:
+        return capabilities, tier
+    override = overrides.get(model_id)
+    if not override:
+        return capabilities, tier
+    if "capabilities" in override:
+        capabilities = list(override["capabilities"])
+    if "tier" in override:
+        tier = ModelTier(override["tier"])
+    return capabilities, tier
+
+
+# ---------------------------------------------------------------------------
+# Model parsing
+# ---------------------------------------------------------------------------
 
 def _parse_openrouter_model(data: dict) -> ModelInfo:
     """Parse an OpenRouter API model entry into ModelInfo."""
@@ -57,9 +116,23 @@ def _parse_openrouter_model(data: dict) -> ModelInfo:
         output_price = 0.0
 
     context_window = data.get("context_length", 4096)
-
-    # Infer provider from model ID prefix
     provider = model_id.split("/")[0] if "/" in model_id else ""
+
+    # Resolve capabilities + tier via curated mapping, then fallback
+    family = _match_family(model_id)
+    if family:
+        capabilities = list(family["capabilities"])
+        tier = ModelTier(family["tier"])
+    else:
+        capabilities = _infer_capabilities_fallback(model_id)
+        tier = _infer_tier_from_price(input_price)
+
+    # Enrich with API modality data
+    if _has_vision(data) and "vision" not in capabilities:
+        capabilities.append("vision")
+
+    # Apply user overrides
+    capabilities, tier = _apply_overrides(model_id, capabilities, tier)
 
     return ModelInfo(
         id=model_id,
@@ -68,8 +141,8 @@ def _parse_openrouter_model(data: dict) -> ModelInfo:
         input_price=input_price,
         output_price=output_price,
         context_window=context_window,
-        capabilities=_infer_capabilities(model_id),
-        tier=_infer_tier(input_price),
+        capabilities=capabilities,
+        tier=tier,
     )
 
 

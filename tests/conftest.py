@@ -17,7 +17,7 @@ SAMPLE_MODELS = [
         input_price=0.40,
         output_price=1.60,
         context_window=1_000_000,
-        capabilities=["code", "reasoning", "vision"],
+        capabilities=["general", "code", "reasoning", "vision"],
         tier=ModelTier.BUDGET,
     ),
     ModelInfo(
@@ -27,7 +27,7 @@ SAMPLE_MODELS = [
         input_price=2.00,
         output_price=8.00,
         context_window=1_000_000,
-        capabilities=["code", "reasoning", "vision"],
+        capabilities=["general", "code", "reasoning", "vision"],
         tier=ModelTier.MID,
     ),
     ModelInfo(
@@ -37,7 +37,7 @@ SAMPLE_MODELS = [
         input_price=3.00,
         output_price=15.00,
         context_window=200_000,
-        capabilities=["code", "reasoning", "creative", "vision"],
+        capabilities=["general", "code", "reasoning", "creative", "vision"],
         tier=ModelTier.MID,
     ),
     ModelInfo(
@@ -47,7 +47,7 @@ SAMPLE_MODELS = [
         input_price=15.00,
         output_price=75.00,
         context_window=200_000,
-        capabilities=["code", "reasoning", "creative", "vision"],
+        capabilities=["general", "code", "reasoning", "creative", "vision"],
         tier=ModelTier.FLAGSHIP,
     ),
     ModelInfo(
@@ -67,7 +67,7 @@ SAMPLE_MODELS = [
         input_price=0.15,
         output_price=0.60,
         context_window=1_000_000,
-        capabilities=["code", "vision"],
+        capabilities=["general", "code", "vision"],
         tier=ModelTier.BUDGET,
     ),
     ModelInfo(
@@ -77,7 +77,7 @@ SAMPLE_MODELS = [
         input_price=0.14,
         output_price=0.28,
         context_window=128_000,
-        capabilities=["code"],
+        capabilities=["general", "code"],
         tier=ModelTier.BUDGET,
     ),
 ]

@@ -5,10 +5,12 @@ from __future__ import annotations
 import json
 from unittest.mock import patch
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
 from tokenwise.models import ModelInfo, ModelTier
+from tokenwise.providers import ProviderResolver
 from tokenwise.proxy import app, state
 from tokenwise.registry import ModelRegistry
 from tokenwise.router import Router
@@ -21,10 +23,22 @@ SAMPLE_MODELS = [
         input_price=0.40,
         output_price=1.60,
         context_window=1_000_000,
-        capabilities=["code", "vision"],
+        capabilities=["general", "code", "vision"],
         tier=ModelTier.BUDGET,
     ),
 ]
+
+_UPSTREAM_RESPONSE = {
+    "choices": [{
+        "message": {"role": "assistant", "content": "Hello!"},
+        "finish_reason": "stop",
+    }],
+    "usage": {
+        "prompt_tokens": 5,
+        "completion_tokens": 3,
+        "total_tokens": 8,
+    },
+}
 
 
 @pytest.fixture
@@ -37,11 +51,9 @@ def client():
 
     state.registry = registry
     state.router = Router(registry)
-
-    # Mock the async HTTP client
-    import httpx
-
+    state.resolver = ProviderResolver()
     state.http_client = httpx.AsyncClient()
+    state.failed_models = set()
 
     with TestClient(app) as c:
         yield c
@@ -76,6 +88,7 @@ class TestChatCompletions:
             "created": 0,
             "model": "openai/gpt-4.1-mini",
         }
+
         def _chunk(delta, finish_reason=None):
             return "data: " + json.dumps({
                 **chunk_base,
@@ -92,63 +105,43 @@ class TestChatCompletions:
             _chunk({}, finish_reason="stop"),
             "data: [DONE]",
         ]
-        mock_stream = MockStreamResponse(200, sse_lines)
 
+        mock_provider = MockProvider(stream_lines=sse_lines)
         with patch.object(
-            state.http_client, "build_request", return_value="fake_req",
+            state.resolver, "resolve",
+            return_value=(mock_provider, "gpt-4.1-mini"),
         ):
-            with patch.object(
-                state.http_client, "send",
-                new=AsyncMock(return_value=mock_stream),
-            ):
-                resp = client.post(
-                    "/v1/chat/completions",
-                    json={
-                        "model": "openai/gpt-4.1-mini",
-                        "messages": [{"role": "user", "content": "Hi"}],
-                        "stream": True,
-                    },
-                )
-                assert resp.status_code == 200
-                assert "text/event-stream" in resp.headers["content-type"]
+            resp = client.post(
+                "/v1/chat/completions",
+                json={
+                    "model": "openai/gpt-4.1-mini",
+                    "messages": [{"role": "user", "content": "Hi"}],
+                    "stream": True,
+                },
+            )
+            assert resp.status_code == 200
+            assert "text/event-stream" in resp.headers["content-type"]
 
-                body = resp.text
-                events = [
-                    evt for evt in body.strip().split("\n\n")
-                    if evt.startswith("data:")
-                ]
-                assert len(events) >= 2
+            body = resp.text
+            events = [
+                evt for evt in body.strip().split("\n\n")
+                if evt.startswith("data:")
+            ]
+            assert len(events) >= 2
 
-                first_data = json.loads(events[0].removeprefix("data: "))
-                assert first_data["object"] == "chat.completion.chunk"
-                assert first_data["choices"][0]["delta"]["content"] == "Hi"
+            first_data = json.loads(events[0].removeprefix("data: "))
+            assert first_data["object"] == "chat.completion.chunk"
+            assert first_data["choices"][0]["delta"]["content"] == "Hi"
 
-                assert events[-1].strip() == "data: [DONE]"
+            assert events[-1].strip() == "data: [DONE]"
 
     def test_ignores_extra_fields(self, client):
         """Extra fields in the request should not cause validation errors."""
-        with patch.object(state, "http_client") as mock_client:
-            mock_response = MockResponse(
-                200,
-                {
-                    "choices": [
-                        {
-                            "message": {
-                                "role": "assistant",
-                                "content": "Hello!",
-                            },
-                            "finish_reason": "stop",
-                        }
-                    ],
-                    "usage": {
-                        "prompt_tokens": 5,
-                        "completion_tokens": 3,
-                        "total_tokens": 8,
-                    },
-                },
-            )
-            mock_client.post = AsyncMock(return_value=mock_response)
-
+        mock_provider = MockProvider(response=_UPSTREAM_RESPONSE)
+        with patch.object(
+            state.resolver, "resolve",
+            return_value=(mock_provider, "gpt-4.1-mini"),
+        ):
             resp = client.post(
                 "/v1/chat/completions",
                 json={
@@ -162,28 +155,17 @@ class TestChatCompletions:
 
     def test_auto_routing(self, client):
         """model='auto' should trigger routing."""
-        with patch.object(state, "http_client") as mock_client:
-            mock_response = MockResponse(
-                200,
-                {
-                    "choices": [
-                        {
-                            "message": {
-                                "role": "assistant",
-                                "content": "Hi!",
-                            },
-                            "finish_reason": "stop",
-                        }
-                    ],
-                    "usage": {
-                        "prompt_tokens": 5,
-                        "completion_tokens": 2,
-                        "total_tokens": 7,
-                    },
-                },
-            )
-            mock_client.post = AsyncMock(return_value=mock_response)
-
+        mock_provider = MockProvider(response={
+            **_UPSTREAM_RESPONSE,
+            "choices": [{
+                "message": {"role": "assistant", "content": "Hi!"},
+                "finish_reason": "stop",
+            }],
+        })
+        with patch.object(
+            state.resolver, "resolve",
+            return_value=(mock_provider, "gpt-4.1-mini"),
+        ):
             resp = client.post(
                 "/v1/chat/completions",
                 json={
@@ -195,32 +177,21 @@ class TestChatCompletions:
             data = resp.json()
             assert data["object"] == "chat.completion"
             assert data["choices"][0]["message"]["content"] == "Hi!"
-            assert data["model"]  # should be filled in
+            assert data["model"]
 
     def test_passthrough_model(self, client):
         """Explicit model ID should be passed through."""
-        with patch.object(state, "http_client") as mock_client:
-            mock_response = MockResponse(
-                200,
-                {
-                    "choices": [
-                        {
-                            "message": {
-                                "role": "assistant",
-                                "content": "Done",
-                            },
-                            "finish_reason": "stop",
-                        }
-                    ],
-                    "usage": {
-                        "prompt_tokens": 5,
-                        "completion_tokens": 1,
-                        "total_tokens": 6,
-                    },
-                },
-            )
-            mock_client.post = AsyncMock(return_value=mock_response)
-
+        mock_provider = MockProvider(response={
+            **_UPSTREAM_RESPONSE,
+            "choices": [{
+                "message": {"role": "assistant", "content": "Done"},
+                "finish_reason": "stop",
+            }],
+        })
+        with patch.object(
+            state.resolver, "resolve",
+            return_value=(mock_provider, "gpt-4.1-mini"),
+        ):
             resp = client.post(
                 "/v1/chat/completions",
                 json={
@@ -235,44 +206,22 @@ class TestChatCompletions:
 # -- Helpers --
 
 
-class MockResponse:
-    """Mock httpx.Response for async client."""
+class MockProvider:
+    """Mock LLM provider for proxy tests."""
 
-    def __init__(self, status_code: int, json_data: dict):
-        self.status_code = status_code
-        self._json = json_data
+    name = "mock"
 
-    def json(self):
-        return self._json
+    def __init__(
+        self,
+        response: dict | None = None,
+        stream_lines: list[str] | None = None,
+    ):
+        self._response = response or {}
+        self._stream_lines = stream_lines or []
 
-    def raise_for_status(self):
-        if self.status_code >= 400:
-            raise Exception(f"HTTP {self.status_code}")
+    async def achat_completion(self, model, messages, **kwargs):
+        return self._response
 
-
-class AsyncMock:
-    """Simple async mock for httpx.AsyncClient.post."""
-
-    def __init__(self, return_value):
-        self._return_value = return_value
-        self.call_args = None
-
-    async def __call__(self, *args, **kwargs):
-        self.call_args = (args, kwargs)
-        return self._return_value
-
-
-class MockStreamResponse:
-    """Mock httpx streaming response that yields SSE lines."""
-
-    def __init__(self, status_code: int, lines: list[str]):
-        self.status_code = status_code
-        self._lines = lines
-        self.request = type("Req", (), {"url": "http://test"})()
-
-    async def aiter_lines(self):
-        for line in self._lines:
+    async def astream_completion(self, model, messages, **kwargs):
+        for line in self._stream_lines:
             yield line
-
-    async def aclose(self):
-        pass

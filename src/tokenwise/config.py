@@ -11,13 +11,19 @@ from pydantic import BaseModel, Field
 
 
 class MissingAPIKeyError(Exception):
-    """Raised when an OpenRouter API key is required but not configured."""
+    """Raised when no API key is configured for any provider."""
 
     def __init__(self) -> None:
         super().__init__(
-            "OPENROUTER_API_KEY is not set. "
-            "Get one at https://openrouter.ai/keys and set it:\n"
-            "  export OPENROUTER_API_KEY='sk-or-...'"
+            "No API key configured. Set one of:\n"
+            "  export OPENROUTER_API_KEY='sk-or-...'  "
+            "(routes all providers via OpenRouter)\n"
+            "  export OPENAI_API_KEY='sk-...'          "
+            "(direct OpenAI access)\n"
+            "  export ANTHROPIC_API_KEY='sk-ant-...'   "
+            "(direct Anthropic access)\n"
+            "  export GOOGLE_API_KEY='...'             "
+            "(direct Google AI access)"
         )
 
 
@@ -44,9 +50,18 @@ class Settings(BaseModel):
     local_models_file: str | None = Field(
         default=None, description="Path to a local models YAML file for offline use"
     )
+    openai_api_key: str = Field(default="", description="OpenAI API key (direct)")
+    anthropic_api_key: str = Field(
+        default="", description="Anthropic API key (direct)"
+    )
+    google_api_key: str = Field(default="", description="Google AI API key (direct)")
+    model_overrides: dict[str, dict] | None = Field(
+        default=None,
+        description="Per-model capability/tier overrides",
+    )
 
     def require_api_key(self) -> str:
-        """Return the API key or raise MissingAPIKeyError."""
+        """Return the OpenRouter API key or raise MissingAPIKeyError."""
         if not self.openrouter_api_key:
             raise MissingAPIKeyError
         return self.openrouter_api_key
@@ -66,6 +81,9 @@ def load_settings(config_path: Path | None = None) -> Settings:
         "TOKENWISE_PROXY_PORT": "proxy_port",
         "TOKENWISE_CACHE_TTL": "cache_ttl",
         "TOKENWISE_LOCAL_MODELS": "local_models_file",
+        "OPENAI_API_KEY": "openai_api_key",
+        "ANTHROPIC_API_KEY": "anthropic_api_key",
+        "GOOGLE_API_KEY": "google_api_key",
     }
 
     for env_var, field_name in env_map.items():

@@ -4,10 +4,8 @@ from __future__ import annotations
 
 import logging
 
-import httpx
-
-from tokenwise.config import get_settings
 from tokenwise.models import ModelInfo, Plan, PlanResult, Step, StepResult
+from tokenwise.providers import ProviderResolver
 from tokenwise.registry import ModelRegistry
 
 logger = logging.getLogger(__name__)
@@ -25,6 +23,7 @@ class Executor:
 
     def __init__(self, registry: ModelRegistry | None = None) -> None:
         self.registry = registry or ModelRegistry()
+        self._resolver = ProviderResolver()
         self._failed_models: set[str] = set()
 
     def execute(self, plan: Plan) -> PlanResult:
@@ -119,39 +118,23 @@ class Executor:
         budget_remaining: float,
     ) -> StepResult:
         """Execute a single step by calling the LLM."""
-        settings = get_settings()
-        api_key = settings.require_api_key()
-
-        headers: dict[str, str] = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {api_key}",
-        }
-
         try:
-            resp = httpx.post(
-                f"{settings.openrouter_base_url}/chat/completions",
-                headers=headers,
-                json={
-                    "model": model_id,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "temperature": 0.7,
-                },
-                timeout=120.0,
+            provider, provider_model = self._resolver.resolve(model_id)
+            data = provider.chat_completion(
+                model=provider_model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.7,
             )
-            resp.raise_for_status()
-            data = resp.json()
 
             content = data["choices"][0]["message"]["content"]
             usage = data.get("usage", {})
             input_tokens = usage.get("prompt_tokens", 0)
             output_tokens = usage.get("completion_tokens", 0)
 
-            # Calculate actual cost
             model = self.registry.get_model(model_id)
-            if model:
-                actual_cost = model.estimate_cost(input_tokens, output_tokens)
-            else:
-                actual_cost = 0.0
+            actual_cost = (
+                model.estimate_cost(input_tokens, output_tokens) if model else 0.0
+            )
 
             return StepResult(
                 step_id=step_id,

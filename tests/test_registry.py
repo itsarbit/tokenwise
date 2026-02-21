@@ -9,39 +9,86 @@ from httpx import Response
 from tokenwise.models import ModelTier
 from tokenwise.registry import (
     ModelRegistry,
-    _infer_capabilities,
-    _infer_tier,
+    _has_vision,
+    _infer_capabilities_fallback,
+    _infer_tier_from_price,
+    _match_family,
     _parse_openrouter_model,
 )
 
 
-class TestInferCapabilities:
-    def test_code_model(self):
-        caps = _infer_capabilities("deepseek/deepseek-coder-v2")
+class TestCapabilityResolution:
+    def test_curated_match_gpt4_mini(self):
+        family = _match_family("openai/gpt-4.1-mini")
+        assert family is not None
+        assert "code" in family["capabilities"]
+        assert "general" in family["capabilities"]
+
+    def test_curated_match_o3(self):
+        family = _match_family("openai/o3")
+        assert family is not None
+        assert "reasoning" in family["capabilities"]
+        assert "math" in family["capabilities"]
+        assert family["tier"] == "flagship"
+
+    def test_curated_match_o3_mini_before_o3(self):
+        """o3-mini should match its own entry, not the broader o3 entry."""
+        family = _match_family("openai/o3-mini")
+        assert family is not None
+        assert family["tier"] == "mid"
+
+    def test_curated_match_deepseek_r1(self):
+        family = _match_family("deepseek/deepseek-r1")
+        assert family is not None
+        assert "reasoning" in family["capabilities"]
+        assert family["tier"] == "mid"
+
+    def test_no_curated_match_unknown(self):
+        assert _match_family("some/unknown-model") is None
+
+    def test_fallback_code_model(self):
+        caps = _infer_capabilities_fallback("some/code-model")
         assert "code" in caps
 
-    def test_reasoning_model(self):
-        caps = _infer_capabilities("openai/o3")
-        assert "reasoning" in caps
+    def test_fallback_unknown_gets_general(self):
+        caps = _infer_capabilities_fallback("some/unknown-model")
+        assert "general" in caps
 
-    def test_vision_model(self):
-        caps = _infer_capabilities("openai/gpt-4.1")
-        assert "vision" in caps
-
-    def test_no_capabilities(self):
-        caps = _infer_capabilities("some/unknown-model")
-        assert caps == []
+    def test_no_false_positive_o1_substring(self):
+        """'o1' in 'bolt-101' should not match reasoning in fallback."""
+        assert _match_family("some/bolt-101") is None
+        caps = _infer_capabilities_fallback("some/bolt-101")
+        assert "reasoning" not in caps
 
 
-class TestInferTier:
-    def test_flagship(self):
-        assert _infer_tier(15.0) == ModelTier.FLAGSHIP
+class TestTierResolution:
+    def test_curated_tier_overrides_price(self):
+        """DeepSeek R1 is cheap but should be mid tier per curated mapping."""
+        family = _match_family("deepseek/deepseek-r1")
+        assert family is not None
+        assert family["tier"] == "mid"
 
-    def test_mid(self):
-        assert _infer_tier(2.0) == ModelTier.MID
+    def test_price_fallback_flagship(self):
+        assert _infer_tier_from_price(15.0) == ModelTier.FLAGSHIP
 
-    def test_budget(self):
-        assert _infer_tier(0.1) == ModelTier.BUDGET
+    def test_price_fallback_mid(self):
+        assert _infer_tier_from_price(2.0) == ModelTier.MID
+
+    def test_price_fallback_budget(self):
+        assert _infer_tier_from_price(0.1) == ModelTier.BUDGET
+
+
+class TestVisionDetection:
+    def test_vision_from_modality(self):
+        data = {"architecture": {"modality": "text+image->text"}}
+        assert _has_vision(data) is True
+
+    def test_no_vision_text_only(self):
+        data = {"architecture": {"modality": "text->text"}}
+        assert _has_vision(data) is False
+
+    def test_no_vision_missing_architecture(self):
+        assert _has_vision({}) is False
 
 
 class TestParseOpenRouterModel:
@@ -51,6 +98,7 @@ class TestParseOpenRouterModel:
             "name": "GPT-4.1 Mini",
             "pricing": {"prompt": "0.0000004", "completion": "0.0000016"},
             "context_length": 1000000,
+            "architecture": {"modality": "text+image->text"},
         }
         model = _parse_openrouter_model(data)
         assert model.id == "openai/gpt-4.1-mini"
@@ -58,12 +106,26 @@ class TestParseOpenRouterModel:
         assert model.input_price == pytest.approx(0.4)
         assert model.output_price == pytest.approx(1.6)
         assert model.context_window == 1000000
+        assert "code" in model.capabilities
+        assert "vision" in model.capabilities
+        assert model.tier == ModelTier.BUDGET
 
     def test_missing_pricing(self):
         data = {"id": "test/model", "name": "Test"}
         model = _parse_openrouter_model(data)
         assert model.input_price == 0.0
         assert model.output_price == 0.0
+
+    def test_unknown_model_uses_fallback(self):
+        data = {
+            "id": "unknown/some-model",
+            "name": "Unknown",
+            "pricing": {"prompt": "0.000001", "completion": "0.000002"},
+            "context_length": 8192,
+        }
+        model = _parse_openrouter_model(data)
+        assert "general" in model.capabilities
+        assert model.tier == ModelTier.MID  # price = 1.0, so mid tier
 
 
 class TestModelRegistry:
