@@ -8,6 +8,8 @@ from typing import Any
 
 import httpx
 
+from tokenwise.providers.base import _shared_or_ephemeral
+
 _DEFAULT_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
 
 _FINISH_REASON_MAP = {
@@ -26,9 +28,10 @@ class GoogleProvider:
 
     name = "google"
 
-    def __init__(self, api_key: str) -> None:
+    def __init__(self, api_key: str, http_client: httpx.AsyncClient | None = None) -> None:
         self.api_key = api_key
         self.base_url = _DEFAULT_BASE_URL
+        self._http_client = http_client
 
     # -- Format translation ---------------------------------------------------
 
@@ -146,11 +149,12 @@ class GoogleProvider:
     ) -> dict[str, Any]:
         payload = self._to_gemini_request(messages, temperature, max_tokens)
         url = f"{self.base_url}/models/{model}:generateContent?key={self.api_key}"
-        async with httpx.AsyncClient(timeout=timeout) as client:
+        async with _shared_or_ephemeral(self._http_client, timeout) as client:
             resp = await client.post(
                 url,
                 headers={"Content-Type": "application/json"},
                 json=payload,
+                timeout=timeout,
             )
             resp.raise_for_status()
             return self._to_openai_response(resp.json(), model)
@@ -167,7 +171,7 @@ class GoogleProvider:
         """Stream from Gemini, converting to OpenAI SSE format."""
         payload = self._to_gemini_request(messages, temperature, max_tokens)
         url = f"{self.base_url}/models/{model}:streamGenerateContent?key={self.api_key}&alt=sse"
-        async with httpx.AsyncClient(timeout=timeout) as client:
+        async with _shared_or_ephemeral(self._http_client, timeout) as client:
             async with client.stream(
                 "POST",
                 url,

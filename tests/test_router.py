@@ -136,9 +136,15 @@ class TestUniversalBudget:
         model = router.route("Complex task", strategy="best_quality", budget=None)
         assert model.tier == ModelTier.FLAGSHIP
 
-    def test_budget_too_tight_still_returns_model(self, sample_registry: ModelRegistry):
-        """When budget is impossibly tight, falls through to unfiltered candidates."""
+    def test_budget_too_tight_raises_strict(self, sample_registry: ModelRegistry):
+        """When budget is impossibly tight and strict, raises ValueError."""
         router = Router(sample_registry)
-        model = router.route("Hello", strategy="cheapest", budget=0.0000001)
+        with pytest.raises(ValueError, match="Budget.*too tight"):
+            router.route("Hello", strategy="cheapest", budget=0.0000001)
+
+    def test_budget_too_tight_relaxed(self, sample_registry: ModelRegistry):
+        """When budget is too tight but budget_strict=False, returns best-effort model."""
+        router = Router(sample_registry)
+        model = router.route("Hello", strategy="cheapest", budget=0.0000001, budget_strict=False)
         # Should still return a model (best-effort ceiling)
         assert model is not None

@@ -242,3 +242,47 @@ class TestProviderResolver:
         p1, _ = resolver.resolve("openai/gpt-4.1-mini")
         p2, _ = resolver.resolve("openai/gpt-4.1")
         assert p1 is p2
+
+    def test_resolver_passes_http_client(self, monkeypatch):
+        """When resolver has an http_client, providers should receive it."""
+        import httpx
+
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+        monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test")
+        reset_settings()
+        client = httpx.AsyncClient()
+        resolver = ProviderResolver(http_client=client)
+        provider, _ = resolver.resolve("openai/gpt-4.1-mini")
+        assert provider._http_client is client
+
+
+class TestSharedClient:
+    """Test that providers accept and use a shared http_client."""
+
+    def test_openai_provider_accepts_client(self):
+        import httpx
+
+        client = httpx.AsyncClient()
+        provider = OpenAIProvider(api_key="test", http_client=client)
+        assert provider._http_client is client
+
+    def test_openrouter_provider_accepts_client(self):
+        import httpx
+
+        client = httpx.AsyncClient()
+        provider = OpenRouterProvider(api_key="test", http_client=client)
+        assert provider._http_client is client
+
+    def test_anthropic_provider_accepts_client(self):
+        import httpx
+
+        client = httpx.AsyncClient()
+        provider = AnthropicProvider(api_key="test", http_client=client)
+        assert provider._http_client is client
+
+    def test_google_provider_accepts_client(self):
+        import httpx
+
+        client = httpx.AsyncClient()
+        provider = GoogleProvider(api_key="test", http_client=client)
+        assert provider._http_client is client

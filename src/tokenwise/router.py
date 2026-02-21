@@ -80,6 +80,7 @@ class Router:
         strategy: RoutingStrategy | str = RoutingStrategy.BALANCED,
         budget: float | None = None,
         required_capability: str | None = None,
+        budget_strict: bool = True,
     ) -> ModelInfo:
         """Pick the best model for a query.
 
@@ -88,12 +89,15 @@ class Router:
             strategy: Routing strategy (cheapest, best_quality, balanced).
             budget: Optional max cost in USD — applied as a ceiling on all strategies.
             required_capability: Explicitly required capability (overrides detection).
+            budget_strict: When True (default), raise ValueError if no model fits the
+                budget. When False, fall through to the cheapest available model.
 
         Returns:
             The selected ModelInfo.
 
         Raises:
-            ValueError: If no suitable model is found.
+            ValueError: If no suitable model is found, or if budget is too tight
+                and budget_strict is True.
         """
         if isinstance(strategy, str):
             strategy = RoutingStrategy(strategy)
@@ -113,7 +117,16 @@ class Router:
             affordable = self._filter_by_budget(candidates, budget, complexity)
             if affordable:
                 candidates = affordable
-            # If nothing is affordable, keep full set (best-effort ceiling)
+            elif budget_strict and candidates:
+                # Nothing affordable and strict mode — raise with helpful info
+                cheapest = min(candidates, key=lambda m: m.input_price)
+                est_in, est_out = _TOKEN_ESTIMATES.get(complexity, (1000, 500))
+                cheapest_cost = cheapest.estimate_cost(est_in, est_out)
+                raise ValueError(
+                    f"Budget ${budget:.6f} is too tight. Cheapest option is "
+                    f"{cheapest.id} at ~${cheapest_cost:.6f} estimated cost."
+                )
+            # If not strict, keep full set (best-effort ceiling)
 
         if not candidates:
             raise ValueError(f"No models found for capability={primary_cap}")

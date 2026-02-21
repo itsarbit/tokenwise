@@ -2,6 +2,24 @@
 
 All notable changes to TokenWise will be documented in this file.
 
+## [0.3.0] - 2026-02-20
+
+### Added
+- **CostLedger** — structured cost tracking across attempts and escalations; `PlanResult.ledger` records every LLM call with reason, model, tokens, cost, and success/failure
+- **Strict budget ceiling** — `router.route()` now raises `ValueError` when no model fits the budget (controlled via `budget_strict` parameter; default `True`)
+- **Decomposition visibility** — `Plan` now exposes `decomposition_source` ("llm" or "fallback") and `decomposition_error` so callers know when task decomposition fell back
+- **TTL on failed models** — proxy's failed-model set now expires entries after 5 minutes (configurable) and caps at 50 entries, preventing unbounded growth
+- **Shared HTTP client** — providers reuse the proxy's `httpx.AsyncClient` instead of creating a new client per request, reducing connection overhead
+- **Ledger table in CLI** — `tokenwise plan --execute` now prints a Rich cost breakdown table with wasted-cost summary
+
+### Changed
+- **Escalation ordering** — executor and proxy now escalate to stronger tiers first (FLAGSHIP → MID) instead of trying budget tier first; fallback candidates are filtered by capability
+- **Retryable error codes** — removed HTTP 400 from retryable/fallback codes (400 is a request schema error, not a model outage)
+- **Router** — budget is strict by default; planner uses `budget_strict=False` for its own internal routing
+
+### Fixed
+- Proxy `failed_models` set no longer grows without bound across the server lifetime
+
 ## [0.2.0] - 2026-02-20
 
 ### Added
@@ -34,5 +52,5 @@ All notable changes to TokenWise will be documented in this file.
 - **Model Registry** — loads model metadata and pricing from OpenRouter API with local YAML fallback and TTL caching
 - **Capability Detection** — heuristic keyword matching for code, reasoning, math, vision, and creative tasks
 - **CLI** — `tokenwise serve`, `tokenwise route`, `tokenwise plan` commands via Typer
-- **Resilient fallback** — executor and proxy retry with alternative models on 400/402/403/404 errors, tracking failed models across steps
+- **Resilient fallback** — executor and proxy retry with alternative models on 402/403/404 errors, tracking failed models across steps
 - **Example scripts** — 4 runnable demos covering routing, plan & execute, budget comparison, and the proxy

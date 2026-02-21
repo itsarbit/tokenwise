@@ -8,6 +8,8 @@ from typing import Any
 
 import httpx
 
+from tokenwise.providers.base import _shared_or_ephemeral
+
 _DEFAULT_BASE_URL = "https://api.anthropic.com/v1"
 _API_VERSION = "2023-06-01"
 
@@ -26,9 +28,10 @@ class AnthropicProvider:
 
     name = "anthropic"
 
-    def __init__(self, api_key: str) -> None:
+    def __init__(self, api_key: str, http_client: httpx.AsyncClient | None = None) -> None:
         self.api_key = api_key
         self.base_url = _DEFAULT_BASE_URL
+        self._http_client = http_client
 
     def _headers(self) -> dict[str, str]:
         return {
@@ -146,11 +149,12 @@ class AnthropicProvider:
             temperature,
             max_tokens,
         )
-        async with httpx.AsyncClient(timeout=timeout) as client:
+        async with _shared_or_ephemeral(self._http_client, timeout) as client:
             resp = await client.post(
                 f"{self.base_url}/messages",
                 headers=self._headers(),
                 json=payload,
+                timeout=timeout,
             )
             resp.raise_for_status()
             return self._to_openai_response(resp.json())
@@ -173,7 +177,7 @@ class AnthropicProvider:
         )
         payload["stream"] = True
 
-        async with httpx.AsyncClient(timeout=timeout) as client:
+        async with _shared_or_ephemeral(self._http_client, timeout) as client:
             async with client.stream(
                 "POST",
                 f"{self.base_url}/messages",

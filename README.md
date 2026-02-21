@@ -232,10 +232,11 @@ src/tokenwise/
     └── model_capabilities.json  # Curated model family → capabilities mapping
 ```
 
-## Known Limitations (v0.2)
+## Known Limitations (v0.3)
 
 - **Linear execution** — plan steps run sequentially; parallel step execution is not yet implemented.
 - **Planner cost not budgeted** — the LLM call used to decompose the task is not deducted from the user's budget.
+- **No persistent spend tracking** — the `CostLedger` lives in memory for a single plan execution; there is no cross-session spend history yet.
 
 ## Development
 

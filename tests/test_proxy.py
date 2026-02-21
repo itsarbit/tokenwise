@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 
 from tokenwise.models import ModelInfo, ModelTier
 from tokenwise.providers import ProviderResolver
-from tokenwise.proxy import app, state
+from tokenwise.proxy import _FailedModels, app, state
 from tokenwise.registry import ModelRegistry
 from tokenwise.router import Router
 
@@ -53,9 +53,9 @@ def client():
 
     state.registry = registry
     state.router = Router(registry)
-    state.resolver = ProviderResolver()
     state.http_client = httpx.AsyncClient()
-    state.failed_models = set()
+    state.resolver = ProviderResolver(http_client=state.http_client)
+    state.failed_models = _FailedModels()
 
     with TestClient(app) as c:
         yield c
@@ -216,6 +216,41 @@ class TestChatCompletions:
             )
             assert resp.status_code == 200
             assert resp.json()["model"] == "openai/gpt-4.1-mini"
+
+
+class TestFailedModels:
+    def test_add_and_contains(self):
+        fm = _FailedModels()
+        fm.add("model-a")
+        assert "model-a" in fm
+        assert "model-b" not in fm
+
+    def test_to_set(self):
+        fm = _FailedModels()
+        fm.add("model-a")
+        fm.add("model-b")
+        assert fm.to_set() == {"model-a", "model-b"}
+
+    def test_ttl_expiry(self):
+        """Entries should expire after TTL."""
+        import time
+
+        fm = _FailedModels(ttl=0.1)  # 100ms TTL
+        fm.add("model-a")
+        assert "model-a" in fm
+        time.sleep(0.15)
+        assert "model-a" not in fm
+        assert fm.to_set() == set()
+
+    def test_max_size_eviction(self):
+        fm = _FailedModels(max_size=3)
+        fm.add("m1")
+        fm.add("m2")
+        fm.add("m3")
+        fm.add("m4")  # Should evict oldest (m1)
+        assert "m1" not in fm
+        assert "m4" in fm
+        assert len(fm.to_set()) == 3
 
 
 # -- Helpers --

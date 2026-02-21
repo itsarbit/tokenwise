@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from dataclasses import dataclass, field
 from typing import Any
 
 from tokenwise.config import MissingAPIKeyError, get_settings
@@ -14,6 +15,16 @@ from tokenwise.registry import ModelRegistry
 from tokenwise.router import Router
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class _DecomposeResult:
+    """Result of task decomposition with provenance metadata."""
+
+    steps: list[dict[str, Any]] = field(default_factory=list)
+    source: str = "llm"  # "llm" or "fallback"
+    error: str | None = None
+
 
 _DECOMPOSITION_PROMPT = """\
 You are a task planner. Given a task, decompose it into a list of concrete subtasks.
@@ -75,10 +86,10 @@ class Planner:
         preferences = preferences or {}
 
         # Step 1: Decompose the task using the planner model
-        raw_steps = self._decompose_task(task)
+        decomposition = self._decompose_task(task)
 
         # Step 2: Assign models to each step within budget
-        steps = self._assign_models(raw_steps, budget)
+        steps = self._assign_models(decomposition.steps, budget)
 
         # Step 3: Build the plan
         total_cost = sum(s.estimated_cost for s in steps)
@@ -87,6 +98,8 @@ class Planner:
             steps=steps,
             total_estimated_cost=total_cost,
             budget=budget,
+            decomposition_source=decomposition.source,
+            decomposition_error=decomposition.error,
         )
 
         # If over budget, try to trim by using cheaper models
@@ -95,7 +108,7 @@ class Planner:
 
         return plan
 
-    def _decompose_task(self, task: str) -> list[dict[str, Any]]:
+    def _decompose_task(self, task: str) -> _DecomposeResult:
         """Call the planner LLM to decompose a task into subtasks."""
         settings = get_settings()
         prompt = _DECOMPOSITION_PROMPT.format(task=task)
@@ -112,12 +125,28 @@ class Planner:
                 timeout=60.0,
             )
             content = data["choices"][0]["message"]["content"]
-            return self._parse_steps_json(content)
+            parsed = self._parse_steps_json(content)
+            if parsed:
+                return _DecomposeResult(steps=parsed, source="llm")
+            # Parse returned empty list — content was invalid JSON
+            logger.warning(
+                "Could not parse LLM decomposition, first 500 chars: %s",
+                content[:500],
+            )
+            return _DecomposeResult(
+                steps=self._fallback_decomposition(task),
+                source="fallback",
+                error=f"Invalid JSON in LLM response (first 100 chars: {content[:100]})",
+            )
         except MissingAPIKeyError:
             raise
         except Exception as e:
             logger.warning("LLM decomposition failed (%s), using fallback", e)
-            return self._fallback_decomposition(task)
+            return _DecomposeResult(
+                steps=self._fallback_decomposition(task),
+                source="fallback",
+                error=str(e),
+            )
 
     def _parse_steps_json(self, content: str) -> list[dict[str, Any]]:
         """Parse the LLM's JSON response into step dicts."""
@@ -178,6 +207,7 @@ class Planner:
                     strategy="cheapest",
                     budget=step_budget,
                     required_capability=capability if capability != "general" else None,
+                    budget_strict=False,
                 )
             except ValueError:
                 # Use whatever is cheapest

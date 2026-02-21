@@ -61,10 +61,61 @@ class Plan(BaseModel):
     steps: list[Step] = Field(default_factory=list)
     total_estimated_cost: float = Field(default=0.0)
     budget: float = Field(default=1.0, description="Budget cap in USD")
+    decomposition_source: str = Field(
+        default="llm", description="How steps were produced: 'llm' or 'fallback'"
+    )
+    decomposition_error: str | None = Field(
+        default=None, description="Error message if decomposition fell back"
+    )
 
     def is_within_budget(self) -> bool:
         """Check if the plan's estimated cost fits the budget."""
         return self.total_estimated_cost <= self.budget
+
+
+class LedgerEntry(BaseModel):
+    """A single cost record in the execution ledger."""
+
+    reason: str = Field(description="e.g. 'step 1 attempt 1' or 'step 1 escalation attempt 2'")
+    model_id: str
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cost: float = 0.0
+    success: bool = True
+
+
+class CostLedger(BaseModel):
+    """Tracks all spend across attempts and escalations."""
+
+    entries: list[LedgerEntry] = Field(default_factory=list)
+
+    @property
+    def total_cost(self) -> float:
+        return sum(e.cost for e in self.entries)
+
+    @property
+    def wasted_cost(self) -> float:
+        return sum(e.cost for e in self.entries if not e.success)
+
+    def record(
+        self,
+        reason: str,
+        model_id: str,
+        input_tokens: int = 0,
+        output_tokens: int = 0,
+        cost: float = 0.0,
+        success: bool = True,
+    ) -> None:
+        self.entries.append(
+            LedgerEntry(
+                reason=reason,
+                model_id=model_id,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                cost=cost,
+                success=success,
+            )
+        )
 
 
 class StepResult(BaseModel):
@@ -92,6 +143,7 @@ class PlanResult(BaseModel):
     budget: float = 1.0
     success: bool = True
     final_output: str = ""
+    ledger: CostLedger = Field(default_factory=CostLedger)
 
     @property
     def budget_remaining(self) -> float:

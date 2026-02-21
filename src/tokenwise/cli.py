@@ -128,6 +128,11 @@ def plan(
 
     # Display the plan
     console.print(f"\n[bold]Plan for:[/bold] {task_plan.task}")
+    if task_plan.decomposition_source == "fallback":
+        console.print(
+            f"[yellow]Warning: LLM decomposition failed, using single-step fallback. "
+            f"({task_plan.decomposition_error or 'unknown error'})[/yellow]"
+        )
     console.print(f"[bold]Budget:[/bold] ${task_plan.budget:.2f}")
     console.print(f"[bold]Estimated cost:[/bold] ${task_plan.total_estimated_cost:.4f}")
     within = "[green]Yes[/green]" if task_plan.is_within_budget() else "[red]No[/red]"
@@ -161,6 +166,33 @@ def plan(
         console.print(f"\n[bold]Status:[/bold] {status}")
         console.print(f"[bold]Total cost:[/bold] ${result.total_cost:.4f}")
         console.print(f"[bold]Budget remaining:[/bold] ${result.budget_remaining:.4f}")
+
+        if result.ledger.entries:
+            ledger_table = Table(title="Cost Breakdown")
+            ledger_table.add_column("Reason", style="cyan")
+            ledger_table.add_column("Model", style="magenta")
+            ledger_table.add_column("In Tokens", justify="right")
+            ledger_table.add_column("Out Tokens", justify="right")
+            ledger_table.add_column("Cost", justify="right", style="green")
+            ledger_table.add_column("OK?", justify="center")
+
+            for entry in result.ledger.entries:
+                ledger_table.add_row(
+                    entry.reason,
+                    entry.model_id,
+                    str(entry.input_tokens),
+                    str(entry.output_tokens),
+                    f"${entry.cost:.6f}",
+                    "[green]Y[/green]" if entry.success else "[red]N[/red]",
+                )
+
+            console.print()
+            console.print(ledger_table)
+            if result.ledger.wasted_cost > 0:
+                console.print(
+                    f"[yellow]Wasted cost (failed attempts): "
+                    f"${result.ledger.wasted_cost:.6f}[/yellow]"
+                )
 
         if result.final_output:
             console.print(f"\n[bold]Output:[/bold]\n{result.final_output[:2000]}")

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+import httpx
+
 from tokenwise.config import get_settings
 
 if TYPE_CHECKING:
@@ -39,14 +41,16 @@ class ProviderResolver:
       3. Otherwise, fall back to OpenRouter (pass model ID as-is)
     """
 
-    def __init__(self) -> None:
+    def __init__(self, http_client: httpx.AsyncClient | None = None) -> None:
         self._cache: dict[str, Any] = {}
+        self._http_client = http_client
 
     def resolve(self, model_id: str) -> tuple[LLMProvider, str]:
         """Return ``(provider, model_name)`` for *model_id*."""
         settings = get_settings()
         prefix = model_id.split("/")[0] if "/" in model_id else ""
         bare_model = model_id.split("/", 1)[1] if "/" in model_id else model_id
+        http_client = self._http_client
 
         # Check for a direct provider key
         if prefix in _DIRECT_PROVIDERS:
@@ -55,7 +59,7 @@ class ProviderResolver:
             if api_key:
                 provider = self._get_or_create(
                     prefix,
-                    lambda: _import_class(class_path)(api_key),
+                    lambda: _import_class(class_path)(api_key, http_client=http_client),
                 )
                 return provider, bare_model
 
@@ -65,7 +69,9 @@ class ProviderResolver:
         api_key = settings.require_api_key()
         provider = self._get_or_create(
             "openrouter",
-            lambda: OpenRouterProvider(api_key, settings.openrouter_base_url),
+            lambda: OpenRouterProvider(
+                api_key, settings.openrouter_base_url, http_client=http_client
+            ),
         )
         return provider, model_id  # OpenRouter wants the full prefixed ID
 

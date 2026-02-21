@@ -28,9 +28,43 @@ from tokenwise.router import Router
 logger = logging.getLogger(__name__)
 
 # HTTP status codes that indicate the model is unusable (should try another)
-_RETRYABLE_CODES = {400, 402, 403, 404, 422}
+_RETRYABLE_CODES = {402, 403, 404, 422}
 
 _MAX_RETRIES = 3
+
+_FAILED_MODELS_TTL = 300.0  # seconds
+_FAILED_MODELS_MAX_SIZE = 50
+
+
+class _FailedModels:
+    """Set-like container that expires entries after *ttl* seconds."""
+
+    def __init__(
+        self, ttl: float = _FAILED_MODELS_TTL, max_size: int = _FAILED_MODELS_MAX_SIZE
+    ) -> None:
+        self._ttl = ttl
+        self._max_size = max_size
+        self._entries: dict[str, float] = {}  # model_id → monotonic timestamp
+
+    def _evict_stale(self) -> None:
+        now = time.monotonic()
+        self._entries = {k: v for k, v in self._entries.items() if now - v < self._ttl}
+
+    def add(self, model_id: str) -> None:
+        self._evict_stale()
+        self._entries[model_id] = time.monotonic()
+        # Enforce max size by removing oldest entries
+        while len(self._entries) > self._max_size:
+            oldest = min(self._entries, key=self._entries.get)  # type: ignore[arg-type]
+            del self._entries[oldest]
+
+    def __contains__(self, model_id: object) -> bool:
+        self._evict_stale()
+        return model_id in self._entries
+
+    def to_set(self) -> set[str]:
+        self._evict_stale()
+        return set(self._entries)
 
 
 class _State:
@@ -40,7 +74,7 @@ class _State:
     registry: ModelRegistry
     router: Router
     resolver: ProviderResolver
-    failed_models: set[str]
+    failed_models: _FailedModels
 
 
 state = _State()
@@ -52,8 +86,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     state.http_client = httpx.AsyncClient(timeout=120.0)
     state.registry = ModelRegistry()
     state.router = Router(state.registry)
-    state.resolver = ProviderResolver()
-    state.failed_models = set()
+    state.resolver = ProviderResolver(http_client=state.http_client)
+    state.failed_models = _FailedModels()
     yield
     await state.http_client.aclose()
 
@@ -100,11 +134,24 @@ async def _forward_to_upstream(
     )
 
 
-def _get_fallback_models(exclude: set[str]) -> list[str]:
-    """Get fallback model IDs, preferring budget tier for broad accessibility."""
+def _get_fallback_models(exclude: set[str], failed_model_id: str | None = None) -> list[str]:
+    """Get fallback model IDs, escalating from the failed model's tier upward.
+
+    Tries stronger tiers first (FLAGSHIP, then MID), then same tier.
+    Falls back to BUDGET+MID if the failed model is unknown.
+    """
     state.registry.ensure_loaded()
-    candidates = []
-    for tier in [ModelTier.BUDGET, ModelTier.MID]:
+    failed_model = state.registry.get_model(failed_model_id) if failed_model_id else None
+    failed_tier = failed_model.tier if failed_model else ModelTier.BUDGET
+
+    tier_strength = {ModelTier.BUDGET: 0, ModelTier.MID: 1, ModelTier.FLAGSHIP: 2}
+    min_strength = tier_strength.get(failed_tier, 0)
+
+    # Collect tiers in descending strength order (stronger first)
+    candidates: list[str] = []
+    for tier in [ModelTier.FLAGSHIP, ModelTier.MID, ModelTier.BUDGET]:
+        if tier_strength[tier] < min_strength:
+            continue
         for m in state.registry.find_models(tier=tier):
             if m.id not in exclude and m.input_price > 0:
                 candidates.append(m.id)
@@ -158,12 +205,17 @@ async def chat_completions(
         return await _handle_streaming(model_id, is_auto, payload)
 
     # --- non-streaming path ---
-    tried: set[str] = set(state.failed_models)
+    tried: set[str] = state.failed_models.to_set()
     last_error: Exception | None = None
 
     models_to_try = [model_id]
     if is_auto:
-        models_to_try.extend(mid for mid in _get_fallback_models(tried | {model_id})[:_MAX_RETRIES])
+        models_to_try.extend(
+            mid
+            for mid in _get_fallback_models(tried | {model_id}, failed_model_id=model_id)[
+                :_MAX_RETRIES
+            ]
+        )
 
     for mid in models_to_try:
         if mid in tried:
@@ -223,10 +275,15 @@ async def _handle_streaming(
     payload: dict,
 ) -> StreamingResponse:
     """Forward a streaming request via the provider abstraction."""
-    tried: set[str] = set(state.failed_models)
+    tried: set[str] = state.failed_models.to_set()
     models_to_try = [model_id]
     if is_auto:
-        models_to_try.extend(mid for mid in _get_fallback_models(tried | {model_id})[:_MAX_RETRIES])
+        models_to_try.extend(
+            mid
+            for mid in _get_fallback_models(tried | {model_id}, failed_model_id=model_id)[
+                :_MAX_RETRIES
+            ]
+        )
 
     last_error: Exception | None = None
     messages = payload.get("messages", [])

@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from unittest.mock import patch
 
-from tokenwise.planner import Planner
+from tokenwise.planner import Planner, _DecomposeResult
 from tokenwise.registry import ModelRegistry
 
 
@@ -14,15 +14,20 @@ class TestPlanner:
         """When LLM decomposition fails, fallback should produce a single-step plan."""
         planner = Planner(registry=sample_registry)
 
-        # Patch _decompose_task to simulate LLM failure (returns fallback)
-        fallback = planner._fallback_decomposition("Test task")
-        with patch.object(planner, "_decompose_task", return_value=fallback):
+        # Simulate LLM failure via _DecomposeResult with fallback source
+        fallback_steps = planner._fallback_decomposition("Test task")
+        decompose_result = _DecomposeResult(
+            steps=fallback_steps, source="fallback", error="LLM unavailable"
+        )
+        with patch.object(planner, "_decompose_task", return_value=decompose_result):
             plan = planner.plan("Test task", budget=1.0)
 
         assert len(plan.steps) == 1
         assert plan.steps[0].description == "Test task"
         assert plan.budget == 1.0
         assert plan.is_within_budget()
+        assert plan.decomposition_source == "fallback"
+        assert plan.decomposition_error == "LLM unavailable"
 
     def test_plan_assigns_models(self, sample_registry: ModelRegistry):
         """Each step should get a valid model from the registry."""
@@ -42,10 +47,13 @@ class TestPlanner:
                 "estimated_output_tokens": 400,
             },
         ]
-        with patch.object(planner, "_decompose_task", return_value=raw_steps):
+        decompose_result = _DecomposeResult(steps=raw_steps, source="llm")
+        with patch.object(planner, "_decompose_task", return_value=decompose_result):
             plan = planner.plan("Build something", budget=5.0)
 
         assert len(plan.steps) == 2
+        assert plan.decomposition_source == "llm"
+        assert plan.decomposition_error is None
         for step in plan.steps:
             model = sample_registry.get_model(step.model_id)
             assert model is not None
@@ -63,7 +71,8 @@ class TestPlanner:
             }
             for i in range(5)
         ]
-        with patch.object(planner, "_decompose_task", return_value=raw_steps):
+        decompose_result = _DecomposeResult(steps=raw_steps, source="llm")
+        with patch.object(planner, "_decompose_task", return_value=decompose_result):
             plan = planner.plan("Do many things", budget=0.01)
 
         # With a tiny budget, the plan should use cheap models
@@ -96,7 +105,8 @@ class TestPlanner:
                 "estimated_output_tokens": 500,
             },
         ]
-        with patch.object(planner, "_decompose_task", return_value=raw_steps):
+        decompose_result = _DecomposeResult(steps=raw_steps, source="llm")
+        with patch.object(planner, "_decompose_task", return_value=decompose_result):
             plan = planner.plan("Multi-step task", budget=5.0)
 
         assert plan.steps[0].depends_on == []

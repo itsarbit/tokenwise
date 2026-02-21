@@ -7,6 +7,8 @@ from typing import Any
 
 import httpx
 
+from tokenwise.providers.base import _shared_or_ephemeral
+
 
 class OpenAICompatibleProvider:
     """Base for providers that use the OpenAI /chat/completions format.
@@ -17,9 +19,15 @@ class OpenAICompatibleProvider:
 
     name: str = ""
 
-    def __init__(self, api_key: str, base_url: str) -> None:
+    def __init__(
+        self,
+        api_key: str,
+        base_url: str,
+        http_client: httpx.AsyncClient | None = None,
+    ) -> None:
         self.api_key = api_key
         self.base_url = base_url
+        self._http_client = http_client
 
     def _auth_headers(self) -> dict[str, str]:
         return {
@@ -72,7 +80,7 @@ class OpenAICompatibleProvider:
         max_tokens: int | None = None,
         timeout: float = 120.0,
     ) -> dict[str, Any]:
-        async with httpx.AsyncClient(timeout=timeout) as client:
+        async with _shared_or_ephemeral(self._http_client, timeout) as client:
             resp = await client.post(
                 f"{self.base_url}/chat/completions",
                 headers=self._auth_headers(),
@@ -82,6 +90,7 @@ class OpenAICompatibleProvider:
                     temperature,
                     max_tokens,
                 ),
+                timeout=timeout,
             )
             resp.raise_for_status()
             return resp.json()
@@ -97,12 +106,13 @@ class OpenAICompatibleProvider:
     ) -> AsyncIterator[str]:
         payload = self._build_payload(model, messages, temperature, max_tokens)
         payload["stream"] = True
-        async with httpx.AsyncClient(timeout=timeout) as client:
+        async with _shared_or_ephemeral(self._http_client, timeout) as client:
             async with client.stream(
                 "POST",
                 f"{self.base_url}/chat/completions",
                 headers=self._auth_headers(),
                 json=payload,
+                timeout=timeout,
             ) as resp:
                 resp.raise_for_status()
                 async for line in resp.aiter_lines():
