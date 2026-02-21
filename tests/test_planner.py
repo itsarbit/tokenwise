@@ -234,3 +234,63 @@ class TestPlanner:
         result = planner._fallback_decomposition("Build a website")
         assert len(result) == 1
         assert result[0]["description"] == "Build a website"
+
+    def test_parse_steps_json_no_newline_after_fence(self, sample_registry: ModelRegistry):
+        """Fence without newline after opening should still parse."""
+        planner = Planner(registry=sample_registry)
+        step_json = json.dumps(
+            [
+                {
+                    "description": "Step 1",
+                    "capability": "code",
+                    "estimated_input_tokens": 500,
+                    "estimated_output_tokens": 500,
+                }
+            ]
+        )
+        content = f"```json{step_json}```"
+        result = planner._parse_steps_json(content)
+        assert len(result) == 1
+        assert result[0]["description"] == "Step 1"
+
+    def test_parse_steps_json_bracket_extraction(self, sample_registry: ModelRegistry):
+        """When fences don't match, extract the [...] block."""
+        planner = Planner(registry=sample_registry)
+        step_json = json.dumps(
+            [
+                {
+                    "description": "Step 1",
+                    "capability": "code",
+                    "estimated_input_tokens": 500,
+                    "estimated_output_tokens": 500,
+                }
+            ]
+        )
+        content = f"Here are the steps: {step_json} Hope that helps!"
+        result = planner._parse_steps_json(content)
+        assert len(result) == 1
+        assert result[0]["description"] == "Step 1"
+
+    def test_optimize_for_budget_uses_step_capabilities(self, sample_registry: ModelRegistry):
+        """_optimize_for_budget should use step.required_capabilities, not model's."""
+        planner = Planner(registry=sample_registry)
+        from tokenwise.models import Plan, Step
+
+        steps = [
+            Step(
+                id=1,
+                description="Code step",
+                model_id="anthropic/claude-opus-4",
+                estimated_input_tokens=10000,
+                estimated_output_tokens=10000,
+                estimated_cost=0.90,
+                required_capabilities=["code"],
+            ),
+        ]
+        plan = Plan(task="Test", steps=steps, total_estimated_cost=0.90, budget=0.01)
+
+        optimized = planner._optimize_for_budget(plan)
+        # The downgraded model should still have the code capability
+        downgraded = sample_registry.get_model(optimized.steps[0].model_id)
+        assert downgraded is not None
+        assert "code" in downgraded.capabilities

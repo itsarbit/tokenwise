@@ -175,9 +175,9 @@ class Planner:
 
     def _parse_steps_json(self, content: str) -> list[dict[str, Any]]:
         """Parse the LLM's JSON response into step dicts."""
-        # Strip markdown code fences if present
+        # Strip markdown code fences if present (tolerant: newline after fence optional)
         content = content.strip()
-        fence_match = re.search(r"```(?:\w+)?\n(.*?)```", content, re.DOTALL)
+        fence_match = re.search(r"```(?:\w+)?\s*(.*?)```", content, re.DOTALL)
         if fence_match:
             content = fence_match.group(1).strip()
 
@@ -187,6 +187,16 @@ class Planner:
                 return data
         except json.JSONDecodeError:
             pass
+
+        # Fallback: extract the first [...] block
+        bracket_match = re.search(r"\[.*\]", content, re.DOTALL)
+        if bracket_match:
+            try:
+                data = json.loads(bracket_match.group(0))
+                if isinstance(data, list):
+                    return data
+            except json.JSONDecodeError:
+                pass
 
         logger.warning("Could not parse LLM response as JSON, using fallback")
         return []
@@ -294,11 +304,15 @@ class Planner:
             if overage <= 0:
                 break
 
-            # Detect capabilities the current model has
-            current = self.registry.get_model(step.model_id)
+            # Use the step's explicit required capability when available,
+            # fall back to the current model's first capability
             cap = None
-            if current and current.capabilities:
-                cap = current.capabilities[0]
+            if step.required_capabilities:
+                cap = step.required_capabilities[0]
+            else:
+                current = self.registry.get_model(step.model_id)
+                if current and current.capabilities:
+                    cap = current.capabilities[0]
 
             # Find cheapest model that still has the required capability
             cheapest = self.registry.cheapest(capability=cap)

@@ -129,6 +129,8 @@ class Executor:
         """Execute plan steps concurrently according to their dependency graph.
 
         Steps whose dependencies are all satisfied are launched in parallel.
+        Uses reservation-based budgeting: each step reserves its estimated_cost
+        before launch, preventing parallel steps from collectively overshooting.
         """
         result = PlanResult(task=plan.task, budget=plan.budget)
         self._failed_models.clear()
@@ -138,6 +140,8 @@ class Executor:
         completed: dict[int, StepResult] = {}
         outputs: dict[int, str] = {}
         all_ids = {s.id for s in plan.steps}
+        # Track total spend including reserved amounts for in-flight steps
+        reserved_budget: float = 0.0
 
         while True:
             if result.total_cost >= plan.budget:
@@ -157,17 +161,47 @@ class Executor:
                     ready.append(step)
 
             if not ready:
-                # No more steps can run (all done, or deadlock)
+                # Deadlock detection: if steps remain but none are ready
+                remaining_ids = all_ids - set(completed)
+                if remaining_ids:
+                    stuck = sorted(remaining_ids)
+                    logger.error("Deadlock: steps %s have unsatisfied dependencies", stuck)
+                    for sid in stuck:
+                        result.skipped_steps.append(step_map[sid])
+                    result.success = False
                 break
 
-            # Execute ready steps concurrently
+            # Reservation-based budget: only launch steps that fit
+            available_budget = plan.budget - result.total_cost - reserved_budget
+            launchable: list[Step] = []
+            for step in ready:
+                reservation = step.estimated_cost
+                if reservation <= available_budget:
+                    launchable.append(step)
+                    reserved_budget += reservation
+                    available_budget -= reservation
+                else:
+                    # Can't afford this step right now; it stays pending
+                    # and will be retried next iteration (or skipped at budget check)
+                    pass
+
+            if not launchable:
+                # All ready steps are too expensive — skip remaining
+                for sid in sorted(all_ids - set(completed)):
+                    result.skipped_steps.append(step_map[sid])
+                result.success = False
+                break
+
+            # Execute launchable steps concurrently, each with its reserved budget
             tasks = [
-                self._arun_step(step, outputs, plan.budget - result.total_cost, result.ledger)
-                for step in ready
+                self._arun_step(step, outputs, step.estimated_cost * 2, result.ledger)
+                for step in launchable
             ]
             step_results = await asyncio.gather(*tasks)
 
-            for step, step_result in zip(ready, step_results):
+            for step, step_result in zip(launchable, step_results):
+                # Release reservation and account actual cost
+                reserved_budget -= step.estimated_cost
                 completed[step.id] = step_result
                 result.step_results.append(step_result)
                 result.total_cost += step_result.actual_cost
@@ -191,7 +225,11 @@ class Executor:
         budget_remaining: float,
         ledger: CostLedger,
     ) -> StepResult:
-        """Execute a single step asynchronously, with escalation on failure."""
+        """Execute a single step asynchronously, with escalation on failure.
+
+        Returns a StepResult whose actual_cost includes any wasted spend
+        from failed attempts (so the caller can just sum actual_cost).
+        """
         prompt = self._build_prompt(step.description, step.prompt_template, prior_outputs)
 
         if step.model_id in self._failed_models:
@@ -222,10 +260,11 @@ class Executor:
 
         has_budget = step_result.actual_cost < budget_remaining
         if not step_result.success and has_budget:
-            escalated = await self._aescalate(
-                step, prompt, budget_remaining - step_result.actual_cost, ledger
-            )
+            failed_cost = step_result.actual_cost
+            escalated = await self._aescalate(step, prompt, budget_remaining - failed_cost, ledger)
             if escalated is not None:
+                # Include the wasted cost from the failed attempt
+                escalated.actual_cost += failed_cost
                 step_result = escalated
 
         return step_result
