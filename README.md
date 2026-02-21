@@ -23,8 +23,8 @@ Existing LLM routers (RouteLLM, LLMRouter, Not Diamond) only do single-query rou
 - **Task decomposition** — Break complex tasks into subtasks, each routed to the right model
 - **Model registry** — Knows model capabilities, prices, context windows (fetched from [OpenRouter](https://openrouter.ai))
 - **Two-stage routing** — Every route detects the scenario first (capabilities + complexity), then applies your cost/quality preference within that context
-- **OpenAI-compatible proxy** — Drop-in replacement with SSE streaming support
-- **Multi-provider** — Direct API support for OpenAI, Anthropic, and Google; falls back to OpenRouter
+- **OpenAI-compatible proxy** — Drop-in replacement with SSE streaming support; failed models are suppressed via a TTL-based cache (5 min default) to avoid repeated retries
+- **Multi-provider** — Direct API support for OpenAI, Anthropic, and Google; falls back to OpenRouter. The proxy shares a single `httpx.AsyncClient` across all providers for connection pooling.
 - **CLI** — `tokenwise plan`, `tokenwise route`, `tokenwise serve`, `tokenwise models`
 
 ## How It Works
@@ -73,11 +73,11 @@ Existing LLM routers (RouteLLM, LLMRouter, Not Diamond) only do single-query rou
                └───────────────────┘      └────────────────────┘
 ```
 
-Unlike single-step routers that treat model selection as a flat lookup, TokenWise separates *understanding what the query needs* from *choosing how to spend*. Budget is a universal parameter — not a strategy — so every route respects your cost ceiling.
+Unlike single-step routers that treat model selection as a flat lookup, TokenWise separates *understanding what the query needs* from *choosing how to spend*. Budget is a universal parameter — not a strategy. By default, the router enforces the budget as a hard ceiling: if no model fits, it raises an error instead of silently exceeding the limit. (The planner's internal routing uses `budget_strict=False` to allow best-effort downgrading.)
 
 **Planner** decomposes a complex task into subtasks using a cheap LLM, then assigns the optimal model to each step within your budget. If the plan exceeds budget, it automatically downgrades expensive steps.
 
-**Executor** runs a plan step by step, tracks actual token usage and cost, and escalates to a stronger model if a step fails.
+**Executor** runs a plan step by step, tracks actual token usage and cost via a `CostLedger`, and escalates to a stronger model if a step fails. Escalation tries stronger tiers first (flagship before mid) and filters by the failed model's capabilities.
 
 ## Requirements
 
@@ -180,7 +180,7 @@ Every strategy goes through scenario detection first (capability + complexity), 
 | `best_quality` | Maximize quality | Picks the best flagship-tier capable model |
 | `balanced` | Default | Matches model tier to query complexity (short→budget, long→flagship) |
 
-All strategies accept an optional `--budget` parameter that acts as a cost ceiling. When provided, models whose estimated cost exceeds the budget are filtered out before the strategy preference is applied.
+All strategies accept an optional `--budget` parameter that acts as a hard cost ceiling. When provided, models whose estimated cost exceeds the budget are filtered out before the strategy preference is applied. If no model fits within the budget, routing raises an error rather than silently exceeding the limit. Pass `budget_strict=False` in the Python API to fall back to best-effort behavior.
 
 ## Configuration
 
