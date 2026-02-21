@@ -61,8 +61,8 @@ class LedgerStore:
 
     def summary(self) -> dict[str, Any]:
         """Return aggregate spend statistics."""
-        records = self.load(limit=0)  # 0 = load all via [-0:] = all
-        if not records:
+        all_records = self._load_all()
+        if not all_records:
             return {
                 "total_spend": 0.0,
                 "total_wasted": 0.0,
@@ -71,8 +71,6 @@ class LedgerStore:
                 "num_succeeded": 0,
                 "num_failed": 0,
             }
-        # load(limit=0) returns records[-0:] which is all records
-        all_records = self._load_all()
         return {
             "total_spend": sum(r.get("total_cost", 0.0) for r in all_records),
             "total_wasted": sum(r.get("wasted_cost", 0.0) for r in all_records),
