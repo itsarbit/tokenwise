@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Example 1: Routing Strategy Comparison.
 
-Demonstrates the Router with all 4 strategies and capability detection.
-No LLM calls are made — only registry lookups — so this is free to run.
+Demonstrates the Router with all 3 strategies, capability detection, and
+universal budget support. No LLM calls are made — only registry lookups —
+so this is free to run.
 
 Usage:
     uv run python examples/01_routing_strategies.py
@@ -39,7 +40,6 @@ STRATEGIES = [
     RoutingStrategy.CHEAPEST,
     RoutingStrategy.BALANCED,
     RoutingStrategy.BEST_QUALITY,
-    RoutingStrategy.BUDGET_CONSTRAINED,
 ]
 
 
@@ -55,7 +55,7 @@ def main() -> None:
     router = Router(registry)
 
     # Build a Rich table: rows = queries, columns = strategies
-    table = Table(title="Model Selected per Query × Strategy", show_lines=True)
+    table = Table(title="Model Selected per Query × Strategy (budget=$0.10)", show_lines=True)
     table.add_column("Query", style="bold", max_width=30)
     for strategy in STRATEGIES:
         table.add_column(strategy.value, max_width=28)
@@ -63,9 +63,8 @@ def main() -> None:
     for label, query in QUERIES:
         row = [label]
         for strategy in STRATEGIES:
-            budget = 0.10 if strategy == RoutingStrategy.BUDGET_CONSTRAINED else None
             try:
-                model = router.route(query, strategy=strategy, budget=budget)
+                model = router.route(query, strategy=strategy, budget=0.10)
                 cell = f"[bold]{model.id}[/bold]\n"
                 cell += f"Tier: {model.tier.value}\n"
                 cell += f"${model.input_price:.2f}/M in"

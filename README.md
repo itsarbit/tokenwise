@@ -22,8 +22,9 @@ Existing LLM routers (RouteLLM, LLMRouter, Not Diamond) only do single-query rou
 - **Budget-aware planning** — "I have $0.50, get this done" → planner picks the cheapest viable path
 - **Task decomposition** — Break complex tasks into subtasks, each routed to the right model
 - **Model registry** — Knows model capabilities, prices, context windows (fetched from [OpenRouter](https://openrouter.ai))
-- **Simple routing** — For single queries, pick the best model based on cost/quality preference
-- **OpenAI-compatible proxy** — Drop-in replacement so existing apps benefit without code changes
+- **Two-stage routing** — Every route detects the scenario first (capabilities + complexity), then applies your cost/quality preference within that context
+- **OpenAI-compatible proxy** — Drop-in replacement with SSE streaming support
+- **Multi-provider** — Direct API support for OpenAI, Anthropic, and Google; falls back to OpenRouter
 - **CLI** — `tokenwise plan`, `tokenwise route`, `tokenwise serve`, `tokenwise models`
 
 ## How It Works
@@ -44,21 +45,28 @@ Existing LLM routers (RouteLLM, LLMRouter, Not Diamond) only do single-query rou
 │        │               │               │              │
 │        └───────────────┼───────────────┘              │
 │                        ▼                              │
+│          ┌──────────────────────────┐                 │
+│          │    ProviderResolver      │  ← LLM calls    │
+│          │                          │                 │
+│          │  OpenAI    · Anthropic   │                 │
+│          │  Google    · OpenRouter  │                 │
+│          └──────────────────────────┘                 │
+│                                                       │
 │            ┌──────────────┐                           │
 │            │   Registry   │  ← metadata + pricing     │
-│            └──────┬───────┘                           │
-│                   ▼                                   │
-│            ┌──────────────┐                           │
-│            │  OpenRouter  │  ← all LLM calls          │
 │            └──────────────┘                           │
 └───────────────────────────────────────────────────────┘
 ```
 
-**Router** picks the best model for a single query using one of four strategies:
-- `cheapest` — lowest cost model that fits the requirement
-- `best_quality` — flagship-tier model
-- `balanced` — matches model tier to query complexity
-- `budget_constrained` — best model that fits within a dollar budget
+**Router** uses a two-stage pipeline for every request:
+
+1. **Scenario detection** — analyzes the query to identify required capabilities (code, reasoning, math) and estimates complexity (simple, moderate, complex)
+2. **Strategy routing** — filters to capable models within your budget ceiling, then applies the strategy preference:
+   - `cheapest` — pick the cheapest capable model
+   - `best_quality` — pick the best flagship-tier model
+   - `balanced` — match model tier to query complexity
+
+Unlike single-step routers that treat model selection as a flat lookup, TokenWise separates *understanding what the query needs* from *choosing how to spend*. Budget is a universal parameter — not a strategy — so every route respects your cost ceiling.
 
 **Planner** decomposes a complex task into subtasks using a cheap LLM, then assigns the optimal model to each step within your budget. If the plan exceeds budget, it automatically downgrades expensive steps.
 
@@ -67,7 +75,8 @@ Existing LLM routers (RouteLLM, LLMRouter, Not Diamond) only do single-query rou
 ## Requirements
 
 - Python >= 3.10
-- An [OpenRouter](https://openrouter.ai) API key
+- An [OpenRouter](https://openrouter.ai) API key (for model discovery; also used for LLM calls unless direct provider keys are set)
+- Optionally: `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, or `GOOGLE_API_KEY` for direct provider access
 
 ## Install
 
@@ -96,8 +105,8 @@ tokenwise models
 # Route a single query to the best model
 tokenwise route "Write a haiku about Python"
 
-# Route with a specific strategy
-tokenwise route "Debug this segfault" --strategy cheapest
+# Route with a specific strategy and budget ceiling
+tokenwise route "Debug this segfault" --strategy best_quality --budget 0.05
 
 # Plan a complex task with a budget
 tokenwise plan "Build a REST API for a todo app" --budget 0.50
@@ -156,12 +165,15 @@ response = client.chat.completions.create(
 
 ## Routing Strategies
 
+Every strategy goes through scenario detection first (capability + complexity), then applies its preference on the filtered candidate set:
+
 | Strategy | When to Use | How It Works |
 |---|---|---|
-| `cheapest` | Minimize cost | Picks the lowest-price model with the required capability |
-| `best_quality` | Maximize quality | Picks the most capable flagship model |
+| `cheapest` | Minimize cost | Picks the lowest-price capable model |
+| `best_quality` | Maximize quality | Picks the best flagship-tier capable model |
 | `balanced` | Default | Matches model tier to query complexity (short→budget, long→flagship) |
-| `budget_constrained` | Hard budget limit | Picks the best-tier model that fits within the dollar budget |
+
+All strategies accept an optional `--budget` parameter that acts as a cost ceiling. When provided, models whose estimated cost exceeds the budget are filtered out before the strategy preference is applied.
 
 ## Configuration
 
@@ -213,7 +225,7 @@ src/tokenwise/
     └── model_capabilities.json  # Curated model family → capabilities mapping
 ```
 
-## Known Limitations (v0.1)
+## Known Limitations (v0.2)
 
 - **Linear execution** — plan steps run sequentially; parallel step execution is not yet implemented.
 - **Planner cost not budgeted** — the LLM call used to decompose the task is not deducted from the user's budget.

@@ -175,7 +175,7 @@ class Planner:
             try:
                 model = self.router.route(
                     query=raw.get("description", ""),
-                    strategy="budget_constrained",
+                    strategy="cheapest",
                     budget=step_budget,
                     required_capability=capability if capability != "general" else None,
                 )

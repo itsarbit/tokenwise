@@ -75,10 +75,10 @@ def route(
         "balanced",
         "--strategy",
         "-s",
-        help="Routing strategy: cheapest, best_quality, balanced, budget_constrained",
+        help="Routing strategy: cheapest, best_quality, balanced",
     ),
     budget: float | None = typer.Option(
-        None, "--budget", "-b", help="Budget in USD (for budget_constrained)"
+        None, "--budget", "-b", help="Max budget in USD (applies to all strategies)"
     ),
     capability: str | None = typer.Option(None, "--capability", "-c", help="Required capability"),
 ) -> None:

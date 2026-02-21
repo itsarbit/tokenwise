@@ -1,4 +1,9 @@
-"""Router — picks the best model for a single query based on strategy."""
+"""Router — picks the best model for a single query based on strategy.
+
+Uses a two-stage pipeline:
+  1. **Scenario detection** — detect required capabilities and estimate complexity
+  2. **Strategy routing** — filter to capable models within budget, apply preference
+"""
 
 from __future__ import annotations
 
@@ -21,6 +26,13 @@ _REASONING_PATTERNS = [
 _MATH_PATTERNS = [
     re.compile(r"\b(?:calculate|math|equation|integral|derivative|solve|formula)\b", re.I),
 ]
+
+# Token estimates per complexity level: (input_tokens, output_tokens)
+_TOKEN_ESTIMATES: dict[str, tuple[int, int]] = {
+    "simple": (500, 200),
+    "moderate": (1000, 500),
+    "complex": (2000, 1000),
+}
 
 
 def _detect_capabilities(query: str) -> list[str]:
@@ -46,7 +58,18 @@ def _estimate_complexity(query: str) -> str:
 
 
 class Router:
-    """Selects the best model for a single query."""
+    """Selects the best model for a single query.
+
+    Every route goes through a two-stage pipeline:
+
+    **Stage 1 — Scenario detection:**
+      Analyze the query to detect required capabilities (code, reasoning, math)
+      and estimate complexity (simple, moderate, complex).
+
+    **Stage 2 — Strategy routing:**
+      Filter models by detected capability and budget ceiling, then apply
+      the strategy preference (cheapest, best_quality, or balanced).
+    """
 
     def __init__(self, registry: ModelRegistry | None = None) -> None:
         self.registry = registry or ModelRegistry()
@@ -62,9 +85,9 @@ class Router:
 
         Args:
             query: The user query text.
-            strategy: Routing strategy to use.
-            budget: Maximum cost in USD for this query (approximate).
-            required_capability: Explicitly required capability.
+            strategy: Routing strategy (cheapest, best_quality, balanced).
+            budget: Optional max cost in USD — applied as a ceiling on all strategies.
+            required_capability: Explicitly required capability (overrides detection).
 
         Returns:
             The selected ModelInfo.
@@ -75,69 +98,58 @@ class Router:
         if isinstance(strategy, str):
             strategy = RoutingStrategy(strategy)
 
-        # Detect capabilities from query
+        # ── Stage 1: Scenario detection ──────────────────────────────
         detected_caps = _detect_capabilities(query)
         primary_cap = required_capability or (detected_caps[0] if detected_caps else None)
-
         complexity = _estimate_complexity(query)
 
+        # ── Stage 2: Filter → Route ─────────────────────────────────
+        # Filter by capability
+        candidates = self.registry.find_models(capability=primary_cap)
+        candidates = [m for m in candidates if m.input_price > 0]
+
+        # Apply budget ceiling (if provided)
+        if budget is not None:
+            affordable = self._filter_by_budget(candidates, budget, complexity)
+            if affordable:
+                candidates = affordable
+            # If nothing is affordable, keep full set (best-effort ceiling)
+
+        if not candidates:
+            raise ValueError(f"No models found for capability={primary_cap}")
+
+        # Apply strategy preference
         if strategy == RoutingStrategy.CHEAPEST:
-            return self._route_cheapest(primary_cap)
+            return self._route_cheapest(candidates)
         elif strategy == RoutingStrategy.BEST_QUALITY:
-            return self._route_best_quality(primary_cap)
-        elif strategy == RoutingStrategy.BUDGET_CONSTRAINED:
-            if budget is None:
-                raise ValueError("budget is required for budget_constrained strategy")
-            return self._route_budget_constrained(primary_cap, budget, complexity)
+            return self._route_best_quality(candidates)
         else:  # balanced
-            return self._route_balanced(primary_cap, complexity)
+            return self._route_balanced(candidates, complexity)
 
-    def _route_cheapest(self, capability: str | None) -> ModelInfo:
-        model = self.registry.cheapest(capability)
-        if model is None:
-            raise ValueError(f"No models found for capability={capability}")
-        return model
+    def _filter_by_budget(
+        self, candidates: list[ModelInfo], budget: float, complexity: str
+    ) -> list[ModelInfo]:
+        """Filter candidates to those whose estimated cost fits within budget."""
+        est_in, est_out = _TOKEN_ESTIMATES.get(complexity, (1000, 500))
+        return [m for m in candidates if m.estimate_cost(est_in, est_out) <= budget]
 
-    def _route_best_quality(self, capability: str | None) -> ModelInfo:
-        models = self.registry.find_models(capability=capability, tier=ModelTier.FLAGSHIP)
-        if not models:
-            models = self.registry.find_models(capability=capability)
-        if not models:
-            raise ValueError(f"No models found for capability={capability}")
-        # Pick the most expensive flagship (likely highest quality)
-        return max(models, key=lambda m: m.input_price)
+    def _route_cheapest(self, candidates: list[ModelInfo]) -> ModelInfo:
+        """Pick the cheapest model from the candidate set."""
+        return min(candidates, key=lambda m: m.input_price)
 
-    def _route_budget_constrained(
-        self, capability: str | None, budget: float, complexity: str
-    ) -> ModelInfo:
-        # Estimate tokens based on complexity
-        token_estimates = {
-            "simple": (500, 200),
-            "moderate": (1000, 500),
-            "complex": (2000, 1000),
-        }
-        est_in, est_out = token_estimates.get(complexity, (1000, 500))
+    def _route_best_quality(self, candidates: list[ModelInfo]) -> ModelInfo:
+        """Pick the highest-quality model: flagship → mid → budget.
 
-        # Find models where estimated cost fits budget
-        candidates = self.registry.find_models(capability=capability)
-        affordable = [
-            m
-            for m in candidates
-            if m.estimate_cost(est_in, est_out) <= budget and m.input_price > 0
-        ]
-        if not affordable:
-            return self._route_cheapest(capability)
-
-        # Among affordable models, pick the best tier available
+        Within a tier, pick the most expensive (likely highest quality).
+        """
         for tier in [ModelTier.FLAGSHIP, ModelTier.MID, ModelTier.BUDGET]:
-            tier_models = [m for m in affordable if m.tier == tier]
+            tier_models = [m for m in candidates if m.tier == tier]
             if tier_models:
-                return min(tier_models, key=lambda m: m.input_price)
+                return max(tier_models, key=lambda m: m.input_price)
+        return max(candidates, key=lambda m: m.input_price)
 
-        return affordable[0]
-
-    def _route_balanced(self, capability: str | None, complexity: str) -> ModelInfo:
-        # Simple -> budget tier, moderate -> mid tier, complex -> flagship
+    def _route_balanced(self, candidates: list[ModelInfo], complexity: str) -> ModelInfo:
+        """Match model tier to query complexity, cheapest within the target tier."""
         tier_map = {
             "simple": ModelTier.BUDGET,
             "moderate": ModelTier.MID,
@@ -145,11 +157,9 @@ class Router:
         }
         target_tier = tier_map.get(complexity, ModelTier.MID)
 
-        models = self.registry.find_models(capability=capability, tier=target_tier)
-        if not models:
-            models = self.registry.find_models(capability=capability)
-        if not models:
-            raise ValueError(f"No models found for capability={capability}")
+        tier_models = [m for m in candidates if m.tier == target_tier]
+        if tier_models:
+            return min(tier_models, key=lambda m: m.input_price)
 
-        paid = [m for m in models if m.input_price > 0]
-        return paid[0] if paid else models[0]
+        # Fallback: cheapest across all remaining candidates
+        return min(candidates, key=lambda m: m.input_price)

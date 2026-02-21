@@ -137,10 +137,10 @@ def demo_cheapest_strategy(client: httpx.Client) -> None:
     console.print()
 
 
-def demo_budget_constrained(client: httpx.Client) -> None:
-    """Send a request with budget constraint via tokenwise options."""
+def demo_budget_ceiling(client: httpx.Client) -> None:
+    """Send a request with a budget ceiling via tokenwise options."""
     console.print(
-        '[bold yellow]4. POST /v1/chat/completions — strategy: "budget_constrained"[/bold yellow]'
+        '[bold yellow]4. POST /v1/chat/completions — balanced with budget ceiling[/bold yellow]'
     )
 
     resp = client.post(
@@ -156,7 +156,7 @@ def demo_budget_constrained(client: httpx.Client) -> None:
             "temperature": 0.7,
             "max_tokens": 300,
             "tokenwise": {
-                "strategy": "budget_constrained",
+                "strategy": "balanced",
                 "budget": 0.01,
             },
         },
@@ -168,7 +168,9 @@ def demo_budget_constrained(client: httpx.Client) -> None:
     model_used = data.get("model", "?")
     content = data["choices"][0]["message"]["content"]
 
-    console.print(f"  Model used: [bold]{model_used}[/bold] (best model within $0.01 budget)")
+    console.print(
+        f"  Model used: [bold]{model_used}[/bold] (balanced routing within $0.01 budget)"
+    )
     console.print(Panel(content.strip(), title="Response", border_style="green"))
     console.print()
 
@@ -221,7 +223,7 @@ def main() -> None:
         demo_list_models(client)
         demo_auto_routing(client)
         demo_cheapest_strategy(client)
-        demo_budget_constrained(client)
+        demo_budget_ceiling(client)
         demo_streaming(client)
 
     console.print("\n[dim]Proxy runs in a daemon thread and exits with this process.[/dim]\n")

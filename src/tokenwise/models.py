@@ -14,7 +14,6 @@ class RoutingStrategy(str, Enum):
     CHEAPEST = "cheapest"
     BEST_QUALITY = "best_quality"
     BALANCED = "balanced"
-    BUDGET_CONSTRAINED = "budget_constrained"
 
 
 class ModelTier(str, Enum):

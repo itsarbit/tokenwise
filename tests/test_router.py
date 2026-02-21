@@ -70,30 +70,15 @@ class TestRouter:
     def test_route_balanced_simple(self, sample_registry: ModelRegistry):
         router = Router(sample_registry)
         model = router.route("Write a haiku", strategy="balanced")
-        # Simple query → budget tier
+        # Simple query -> budget tier
         assert model.tier == ModelTier.BUDGET
 
     def test_route_balanced_complex(self, sample_registry: ModelRegistry):
         router = Router(sample_registry)
         long_query = " ".join(["analyze"] * 80)
         model = router.route(long_query, strategy="balanced")
-        # Complex query → flagship tier
+        # Complex query -> flagship tier
         assert model.tier == ModelTier.FLAGSHIP
-
-    def test_route_budget_constrained(self, sample_registry: ModelRegistry):
-        router = Router(sample_registry)
-        model = router.route(
-            "Write some code",
-            strategy="budget_constrained",
-            budget=0.01,
-        )
-        # Should pick a cheap model
-        assert model.input_price < 5.0
-
-    def test_route_budget_constrained_requires_budget(self, sample_registry: ModelRegistry):
-        router = Router(sample_registry)
-        with pytest.raises(ValueError, match="budget is required"):
-            router.route("Hello", strategy="budget_constrained")
 
     def test_route_with_required_capability(self, sample_registry: ModelRegistry):
         router = Router(sample_registry)
@@ -102,7 +87,6 @@ class TestRouter:
 
     def test_route_string_strategy(self, sample_registry: ModelRegistry):
         router = Router(sample_registry)
-        # Should accept string strategies
         model = router.route("Hello", strategy="cheapest")
         assert model is not None
 
@@ -113,11 +97,48 @@ class TestRouter:
 
     def test_route_no_models_raises(self):
         empty_registry = ModelRegistry()
-        # Pre-load with no models but mark as loaded
         empty_registry._models = {}
         empty_registry._last_fetched = 9999999999.0
-        # Prevent ensure_loaded from fetching by overriding it
         empty_registry.ensure_loaded = lambda: None
         router = Router(empty_registry)
         with pytest.raises(ValueError, match="No models found"):
             router.route("Hello", strategy="cheapest")
+
+
+class TestUniversalBudget:
+    """Budget is a universal parameter that applies to all strategies."""
+
+    def test_cheapest_with_budget(self, sample_registry: ModelRegistry):
+        """Cheapest with tight budget still returns the cheapest affordable model."""
+        router = Router(sample_registry)
+        model = router.route("Write some code", strategy="cheapest", budget=0.001)
+        assert model.input_price <= 0.20
+
+    def test_best_quality_with_budget(self, sample_registry: ModelRegistry):
+        """best_quality with a tight budget excludes expensive flagships."""
+        router = Router(sample_registry)
+        # $0.005 budget for simple query: flagship models ($10-15/M) cost ~$0.007-0.017,
+        # so they're excluded. Should pick best available non-flagship.
+        model = router.route("Hello", strategy="best_quality", budget=0.005)
+        assert model.tier != ModelTier.FLAGSHIP
+
+    def test_balanced_with_budget(self, sample_registry: ModelRegistry):
+        """Balanced with tight budget forces downgrade from target tier."""
+        router = Router(sample_registry)
+        # Complex query would normally pick flagship, but tight budget forces downgrade
+        long_query = " ".join(["analyze"] * 80)
+        model = router.route(long_query, strategy="balanced", budget=0.005)
+        assert model.input_price < 5.0
+
+    def test_budget_none_means_no_filter(self, sample_registry: ModelRegistry):
+        """budget=None means no ceiling — flagship is reachable."""
+        router = Router(sample_registry)
+        model = router.route("Complex task", strategy="best_quality", budget=None)
+        assert model.tier == ModelTier.FLAGSHIP
+
+    def test_budget_too_tight_still_returns_model(self, sample_registry: ModelRegistry):
+        """When budget is impossibly tight, falls through to unfiltered candidates."""
+        router = Router(sample_registry)
+        model = router.route("Hello", strategy="cheapest", budget=0.0000001)
+        # Should still return a model (best-effort ceiling)
+        assert model is not None
