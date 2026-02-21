@@ -60,11 +60,18 @@ Existing LLM routers (RouteLLM, LLMRouter, Not Diamond) only do single-query rou
 
 **Router** uses a two-stage pipeline for every request:
 
-1. **Scenario detection** — analyzes the query to identify required capabilities (code, reasoning, math) and estimates complexity (simple, moderate, complex)
-2. **Strategy routing** — filters to capable models within your budget ceiling, then applies the strategy preference:
-   - `cheapest` — pick the cheapest capable model
-   - `best_quality` — pick the best flagship-tier model
-   - `balanced` — match model tier to query complexity
+```
+               ┌───────────────────┐      ┌────────────────────┐
+ query ──────▶ │  1. Detect        │─────▶│  2. Route          │──────▶ model
+               │     Scenario      │      │     with Strategy  │
+               │                   │      │                    │
+               │  · capabilities   │      │  · filter budget   │
+               │    (code, reason, │      │  · cheapest /      │
+               │     math)         │      │    balanced /      │
+               │  · complexity     │      │    best_quality    │
+               │    (simple → hard)│      │                    │
+               └───────────────────┘      └────────────────────┘
+```
 
 Unlike single-step routers that treat model selection as a flat lookup, TokenWise separates *understanding what the query needs* from *choosing how to spend*. Budget is a universal parameter — not a strategy — so every route respects your cost ceiling.
 
