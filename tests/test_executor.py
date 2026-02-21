@@ -99,6 +99,26 @@ class TestExecutor:
         assert len(result.step_results) == 1
         assert not result.success
 
+    def test_skipped_steps_recorded(self, sample_registry: ModelRegistry):
+        """Skipped steps should be recorded in result.skipped_steps."""
+        executor = Executor(registry=sample_registry)
+        steps = [
+            Step(id=1, description="Runs", model_id="openai/gpt-4.1-mini", estimated_cost=0.5),
+            Step(id=2, description="Skipped A", model_id="openai/gpt-4.1-mini", estimated_cost=0.5),
+            Step(id=3, description="Skipped B", model_id="openai/gpt-4.1-mini", estimated_cost=0.5),
+        ]
+        plan = _make_plan(steps, budget=0.001)
+
+        with patch.object(executor, "_execute_step") as mock_exec:
+            mock_exec.return_value = _mock_step_result(1, cost=0.002)
+            result = executor.execute(plan)
+
+        assert len(result.step_results) == 1
+        assert len(result.skipped_steps) == 2
+        assert result.skipped_steps[0].id == 2
+        assert result.skipped_steps[1].id == 3
+        assert not result.success
+
     def test_escalation_on_failure(self, sample_registry: ModelRegistry):
         executor = Executor(registry=sample_registry)
         step = Step(

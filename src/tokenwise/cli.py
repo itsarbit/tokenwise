@@ -167,6 +167,14 @@ def plan(
         console.print(f"[bold]Total cost:[/bold] ${result.total_cost:.4f}")
         console.print(f"[bold]Budget remaining:[/bold] ${result.budget_remaining:.4f}")
 
+        if result.skipped_steps:
+            console.print(
+                f"\n[yellow]Skipped {len(result.skipped_steps)} step(s) "
+                f"due to budget exhaustion:[/yellow]"
+            )
+            for s in result.skipped_steps:
+                console.print(f"  [dim]Step {s.id}: {s.description}[/dim]")
+
         if result.ledger.entries:
             ledger_table = Table(title="Cost Breakdown")
             ledger_table.add_column("Reason", style="cyan")

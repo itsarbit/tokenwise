@@ -139,6 +139,10 @@ class PlanResult(BaseModel):
 
     task: str
     step_results: list[StepResult] = Field(default_factory=list)
+    skipped_steps: list[Step] = Field(
+        default_factory=list,
+        description="Steps that were not executed (e.g. budget exhausted)",
+    )
     total_cost: float = 0.0
     budget: float = 1.0
     success: bool = True

@@ -27,8 +27,11 @@ from tokenwise.router import Router
 
 logger = logging.getLogger(__name__)
 
-# HTTP status codes that indicate the model is unusable (should try another)
-_RETRYABLE_CODES = {402, 403, 404, 422}
+# HTTP status codes that indicate the model is unusable (should try a different model)
+_MODEL_UNUSABLE_CODES = {402, 403, 404}
+
+# HTTP status codes that indicate a transient upstream issue (retry same model once)
+_TRANSIENT_CODES = {500, 502, 503, 504}
 
 _MAX_RETRIES = 3
 
@@ -138,11 +141,20 @@ def _get_fallback_models(exclude: set[str], failed_model_id: str | None = None) 
     """Get fallback model IDs, escalating from the failed model's tier upward.
 
     Tries stronger tiers first (FLAGSHIP, then MID), then same tier.
+    Filters by the failed model's capabilities when possible.
     Falls back to BUDGET+MID if the failed model is unknown.
     """
     state.registry.ensure_loaded()
     failed_model = state.registry.get_model(failed_model_id) if failed_model_id else None
     failed_tier = failed_model.tier if failed_model else ModelTier.BUDGET
+
+    # Determine required capability from the failed model
+    required_cap: str | None = None
+    if failed_model and failed_model.capabilities:
+        for cap in failed_model.capabilities:
+            if cap != "general":
+                required_cap = cap
+                break
 
     tier_strength = {ModelTier.BUDGET: 0, ModelTier.MID: 1, ModelTier.FLAGSHIP: 2}
     min_strength = tier_strength.get(failed_tier, 0)
@@ -153,8 +165,21 @@ def _get_fallback_models(exclude: set[str], failed_model_id: str | None = None) 
         if tier_strength[tier] < min_strength:
             continue
         for m in state.registry.find_models(tier=tier):
-            if m.id not in exclude and m.input_price > 0:
-                candidates.append(m.id)
+            if m.id in exclude or m.input_price <= 0:
+                continue
+            if required_cap and required_cap not in m.capabilities:
+                continue
+            candidates.append(m.id)
+
+    # If capability filtering eliminated everything, relax and try without it
+    if not candidates and required_cap:
+        for tier in [ModelTier.FLAGSHIP, ModelTier.MID, ModelTier.BUDGET]:
+            if tier_strength[tier] < min_strength:
+                continue
+            for m in state.registry.find_models(tier=tier):
+                if m.id not in exclude and m.input_price > 0:
+                    candidates.append(m.id)
+
     return candidates
 
 
@@ -227,11 +252,16 @@ async def chat_completions(
             break
         except httpx.HTTPStatusError as e:
             last_error = e
-            if e.response.status_code in _RETRYABLE_CODES:
+            code = e.response.status_code
+            if code in _MODEL_UNUSABLE_CODES:
                 state.failed_models.add(mid)
-                logger.info("Model %s returned %d, trying next", mid, e.response.status_code)
+                logger.info("Model %s returned %d (unusable), trying next", mid, code)
                 continue
-            raise HTTPException(status_code=e.response.status_code, detail=str(e))
+            if code in _TRANSIENT_CODES:
+                logger.info("Model %s returned %d (transient), trying next", mid, code)
+                continue
+            # 400, 422, or other client errors — hard failure, stop retrying
+            raise HTTPException(status_code=code, detail=str(e))
         except Exception as e:
             raise HTTPException(status_code=502, detail=f"Upstream error: {e}")
     else:
@@ -316,18 +346,16 @@ async def _handle_streaming(
             )
         except httpx.HTTPStatusError as exc:
             last_error = exc
-            if exc.response.status_code in _RETRYABLE_CODES:
+            code = exc.response.status_code
+            if code in _MODEL_UNUSABLE_CODES:
                 state.failed_models.add(mid)
-                logger.info(
-                    "Model %s returned %d, trying next",
-                    mid,
-                    exc.response.status_code,
-                )
+                logger.info("Model %s returned %d (unusable), trying next", mid, code)
                 continue
-            raise HTTPException(
-                status_code=exc.response.status_code,
-                detail=str(exc),
-            )
+            if code in _TRANSIENT_CODES:
+                logger.info("Model %s returned %d (transient), trying next", mid, code)
+                continue
+            # 400, 422, or other client errors — hard failure
+            raise HTTPException(status_code=code, detail=str(exc))
         except HTTPException:
             raise
         except Exception as e:

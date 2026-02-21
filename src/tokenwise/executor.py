@@ -11,7 +11,7 @@ from tokenwise.registry import ModelRegistry
 logger = logging.getLogger(__name__)
 
 # HTTP status codes that indicate the model itself is unusable (not a transient error)
-_MODEL_UNUSABLE_CODES = {402, 403, 404, 422}
+_MODEL_UNUSABLE_CODES = {402, 403, 404}
 
 _TIER_STRENGTH: dict[ModelTier, int] = {
     ModelTier.BUDGET: 0,
@@ -45,15 +45,19 @@ class Executor:
         prior_outputs: dict[int, str] = {}
         self._failed_models.clear()
 
+        budget_exhausted = False
         for step in plan.steps:
             # Check budget before executing
             if result.total_cost >= plan.budget:
-                logger.warning(
-                    "Budget exhausted after $%.4f, skipping remaining steps",
-                    result.total_cost,
-                )
+                if not budget_exhausted:
+                    logger.warning(
+                        "Budget exhausted after $%.4f, skipping remaining steps",
+                        result.total_cost,
+                    )
+                    budget_exhausted = True
+                result.skipped_steps.append(step)
                 result.success = False
-                break
+                continue
 
             remaining = plan.budget - result.total_cost
 
