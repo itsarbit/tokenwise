@@ -26,23 +26,12 @@ OpenAI-compatible proxy.
 ```bash
 pip install tokenwise-llm
 
-# Set your OpenRouter API key (or OPENAI_API_KEY / ANTHROPIC_API_KEY / GOOGLE_API_KEY)
-export OPENROUTER_API_KEY="sk-or-..."
-
 # Route a query to the best model within budget
 tokenwise route "Debug this segfault" --strategy best_quality --budget 0.05
 
 # Decompose a task, execute it, track spend
 tokenwise plan "Write a Python function to validate email addresses, \
   then write unit tests for it" --budget 0.05 --execute
-```
-
-```
-Plan: 2 steps, estimated $0.0023
-  Step 1: Write validation func → openai/gpt-4.1-mini  $0.0009
-  Step 2: Write unit tests      → openai/gpt-4.1-mini  $0.0014
-
-Status: Success | Cost: $0.0019 | Budget remaining: $0.0481
 ```
 
 ## Quick Start
