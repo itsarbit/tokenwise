@@ -55,16 +55,40 @@ export OPENROUTER_API_KEY="sk-or-..."
 > default gateway. Set `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, or
 > `GOOGLE_API_KEY` to bypass OpenRouter for those providers.
 
-### CLI
+### Route a query
 
 ```bash
 tokenwise route "Write a haiku about Python"
-tokenwise route "Debug this segfault" --strategy best_quality --budget 0.05
-tokenwise plan "Build a REST API" --budget 0.50 --execute
-tokenwise ledger --summary
-tokenwise serve --port 8000
-tokenwise models
 ```
+
+### Route with budget ceiling
+
+```bash
+tokenwise route "Debug this segfault" --strategy best_quality --budget 0.05
+```
+
+### Plan and execute
+
+```bash
+tokenwise plan "Build a REST API" --budget 0.50 --execute
+```
+
+### Inspect spend
+
+```bash
+tokenwise ledger --summary
+```
+
+### Routing strategies
+
+| Strategy | When to Use | How It Works |
+|---|---|---|
+| `cheapest` | Minimize cost | Lowest-price capable model |
+| `best_quality` | Maximize quality | Best flagship-tier capable model |
+| `balanced` | Default | Matches model tier to query complexity |
+
+Budget is a universal parameter on all strategies. Pass
+`budget_strict=False` to fall back to best-effort.
 
 ### Python API
 
@@ -103,34 +127,16 @@ response = client.chat.completions.create(
 
 ## Core Features
 
-**Budget-aware routing** — strict cost ceilings with
-conservative estimation and enforced `max_tokens` caps (1.2x
-safety margin). Configure `TOKENWISE_MIN_OUTPUT_TOKENS`
-(default 100) for workflows that need tiny outputs under tight
-budgets.
-
-**Tiered escalation** — three tiers (budget, mid, flagship). On
-failure, escalates strictly upward, never downward. A failed code
-model is replaced by a stronger code model, not a generic one.
-
-**Capability-aware selection** — routes and fallbacks filtered by
-`code`, `reasoning`, `math`, or `general`. Capabilities are
-tracked per step, not inferred at retry time.
-
-**Task decomposition** — breaks complex tasks into subtasks via
-an LLM planner, assigns the cheapest capable model to each step,
-and runs independent steps concurrently via async DAG scheduling.
-
-**Cost ledger** — every LLM call is recorded, including failed
-attempts and escalations. Persisted to JSONL across sessions.
-
-**Multi-provider failover** — OpenRouter, OpenAI, Anthropic, and
-Google. Direct API keys bypass OpenRouter automatically. The
-proxy shares a single `httpx.AsyncClient` for connection pooling.
+- **Budget-aware routing** — strict cost ceilings enforced via `max_tokens` caps with 1.2x safety margin.
+- **Tiered escalation** — budget, mid, flagship; escalates upward on failure, never downward.
+- **Capability-aware fallback** — routes and fallbacks filtered by `code`, `reasoning`, `math`, or `general`.
+- **Task decomposition** — LLM-powered planning with per-step model assignment and async DAG scheduling.
+- **Cost ledger** — structured per-call accounting including failures and retries, persisted to JSONL.
+- **Multi-provider failover** — OpenRouter, OpenAI, Anthropic, and Google with connection pooling.
 
 ## Benchmarks
 
-![Cost–Quality Frontier](assets/pareto.png)
+![Cost-Quality Frontier](assets/pareto.png)
 
 TokenWise escalation achieves flagship-level reliability at
 ~9x lower cost than running flagship models exclusively.
@@ -157,9 +163,26 @@ Flagship is strongest but 51x more expensive. Escalation
 starts cheap, detects failures, and upgrades — achieving
 100% success at a fraction of the flagship cost.
 
+## Comparison
+
+High-level comparison of major LLM routing tools (as of
+February 2026). Corrections welcome via
+[issues](https://github.com/itsarbit/tokenwise/issues).
+
+| Feature | TokenWise | [RouteLLM](https://github.com/lm-sys/RouteLLM) | [LiteLLM](https://github.com/BerriAI/litellm) | [Not Diamond](https://notdiamond.ai) | [Martian](https://withmartian.com) | [Portkey](https://portkey.ai) | [OpenRouter](https://openrouter.ai) |
+|---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| Task decomposition | **Yes** | - | - | - | - | - | - |
+| Strict budget ceiling | **Yes** | - | Yes | - | Per-request | Yes | Yes |
+| Tier-based escalation | **Yes** | - | Yes | - | - | Yes | - |
+| Capability-aware fallback | **Yes** | - | - | Partial | Yes | Partial | Partial |
+| Cost ledger | **Yes** | - | Yes | - | - | Yes | Dashboard |
+| OpenAI-compatible proxy | **Yes** | Yes | Yes | Yes | Yes | Yes | Yes |
+| CLI | **Yes** | - | Yes | - | - | - | - |
+| Self-hosted / open source | **Yes** | Yes | Yes | - | - | Gateway only | - |
+
 ## How It Works
 
-### Architecture Overview
+### Architecture
 
 ```
 ┌───────────────────────────────────────────────────────┐
@@ -190,27 +213,12 @@ starts cheap, detects failures, and upgrades — achieving
 └───────────────────────────────────────────────────────┘
 ```
 
-### Router Pipeline
+### Router pipeline
 
-The router uses a two-stage pipeline: detect what the query
-needs, then choose how to spend.
-
-```
-            ┌───────────────────┐    ┌──────────────────┐
- query ───▶ │  1. Detect        │───▶│  2. Route        │───▶ model
-            │     Scenario      │    │     w/ Strategy   │
-            │                   │    │                   │
-            │  · capabilities   │    │  · filter budget  │
-            │    (code, reason, │    │  · cheapest /     │
-            │     math)         │    │    balanced /     │
-            │  · complexity     │    │    best_quality   │
-            │    (simple→hard)  │    │                   │
-            └───────────────────┘    └──────────────────┘
-```
-
-Budget is a universal parameter on all strategies. By default
-the budget is a hard ceiling; pass `budget_strict=False` to fall
-back to best-effort.
+The router uses a two-stage pipeline:
+**detect** (capabilities + complexity) then
+**route** (filter by budget, apply strategy: `cheapest` /
+`balanced` / `best_quality`).
 
 ### Planner and Executor
 
@@ -257,39 +265,6 @@ Step 1: model=openai/gpt-4.1, cost=$0.0052, escalated=True
 Total: $0.0052, wasted: $0.0000, remaining: $0.9948
 ```
 
-### Routing Strategies
-
-| Strategy | When to Use | How It Works |
-|---|---|---|
-| `cheapest` | Minimize cost | Lowest-price capable model |
-| `best_quality` | Maximize quality | Best flagship-tier capable model |
-| `balanced` | Default | Matches model tier to query complexity |
-
-## Comparison
-
-High-level comparison of major LLM routing tools (as of
-February 2026). Corrections welcome via
-[issues](https://github.com/itsarbit/tokenwise/issues).
-
-| Feature | TokenWise | [RouteLLM](https://github.com/lm-sys/RouteLLM) | [LiteLLM](https://github.com/BerriAI/litellm) | [Not Diamond](https://notdiamond.ai) | [Martian](https://withmartian.com) | [Portkey](https://portkey.ai) | [OpenRouter](https://openrouter.ai) |
-|---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
-| Task decomposition | **Yes** | - | - | - | - | - | - |
-| Strict budget ceiling | **Yes** | - | Yes | - | Per-request | Yes | Yes |
-| Tier-based escalation | **Yes** | - | Yes | - | - | Yes | - |
-| Capability-aware fallback | **Yes** | - | - | Partial | Yes | Partial | Partial |
-| Cost ledger | **Yes** | - | Yes | - | - | Yes | Dashboard |
-| OpenAI-compatible proxy | **Yes** | Yes | Yes | Yes | Yes | Yes | Yes |
-| CLI | **Yes** | - | Yes | - | - | - | - |
-| Self-hosted / open source | **Yes** | Yes | Yes | - | - | Gateway only | - |
-
-## Known Limitations (v0.4)
-
-All three v0.3 limitations have been resolved:
-
-- ~~Planner cost not budgeted~~ — tracked and deducted (v0.4)
-- ~~Linear execution~~ — parallel DAG scheduling (v0.4)
-- ~~No persistent spend tracking~~ — JSONL ledger (v0.4)
-
 ## Budget Semantics
 
 TokenWise enforces budget ceilings by capping `max_tokens`
@@ -299,6 +274,14 @@ tokenizer. The budget ceiling is real and enforced, but small
 overruns are possible when the heuristic underestimates input
 tokens. A future release will support pluggable tokenizer-based
 estimation for stricter guarantees.
+
+## Known Limitations (v0.4)
+
+All three v0.3 limitations have been resolved:
+
+- ~~Planner cost not budgeted~~ — tracked and deducted (v0.4)
+- ~~Linear execution~~ — parallel DAG scheduling (v0.4)
+- ~~No persistent spend tracking~~ — JSONL ledger (v0.4)
 
 ## Configuration
 

@@ -396,7 +396,18 @@ def plot_pareto(strategies: dict[str, StrategyResult], output_path: str) -> None
         print("\nmatplotlib not installed. Run: uv sync --group benchmark")
         return
 
-    fig, ax = plt.subplots(figsize=(10, 7))
+    fig, ax = plt.subplots(figsize=(7, 4))
+
+    # Model name lookup for secondary labels
+    model_labels: dict[str, str] = {}
+    for name, sr in strategies.items():
+        if sr.results:
+            models = {r.model_used for r in sr.results}
+            if len(models) == 1:
+                model_labels[name] = next(iter(models)).split("/")[-1]
+
+    # Collect points for Pareto frontier line
+    pareto_points: list[tuple[float, float]] = []
 
     for name, sr in strategies.items():
         if not sr.results:
@@ -405,56 +416,67 @@ def plot_pareto(strategies: dict[str, StrategyResult], output_path: str) -> None
         x = sr.avg_cost
         y = sr.success_rate * 100
         is_esc = name == "TokenWise Escalation"
+        pareto_points.append((x, y))
 
         ax.scatter(
             x,
             y,
             c=sr.color,
             marker=sr.marker,
-            s=400 if is_esc else 150,
+            s=300 if is_esc else 120,
             zorder=10 if is_esc else 5,
             edgecolors="black" if is_esc else "white",
-            linewidths=2 if is_esc else 1,
-        )
-        ax.annotate(
-            name,
-            (x, y),
-            textcoords="offset points",
-            xytext=(14, 8) if is_esc else (10, 6),
-            fontsize=11 if is_esc else 10,
-            fontweight="bold" if is_esc else "normal",
-            color=sr.color,
+            linewidths=1.5 if is_esc else 0.8,
         )
 
+        # Label with model name underneath
+        model_sub = model_labels.get(name, "")
+        label = f"{name}\n({model_sub})" if model_sub else name
+        ax.annotate(
+            label,
+            (x, y),
+            textcoords="offset points",
+            xytext=(12, -6) if not is_esc else (14, 6),
+            fontsize=8.5 if is_esc else 8,
+            fontweight="bold" if is_esc else "normal",
+            color=sr.color,
+            linespacing=1.3,
+        )
+
+    # Draw Pareto frontier (connect non-dominated points)
+    pareto_points.sort(key=lambda p: p[0])
+    frontier: list[tuple[float, float]] = []
+    best_y = -1.0
+    for px, py in pareto_points:
+        if py > best_y:
+            frontier.append((px, py))
+            best_y = py
+    if len(frontier) >= 2:
+        fx = [p[0] for p in frontier]
+        fy = [p[1] for p in frontier]
+        ax.plot(fx, fy, color="#3498db", alpha=0.25, linewidth=1.5,
+                linestyle="--", zorder=1)
+
     ax.set_xscale("log")
-    ax.set_xlabel("Average Cost per Task (USD, log scale)", fontsize=12)
-    ax.set_ylabel("Success Rate (%)", fontsize=12)
+    ax.set_xlabel("Avg Cost / Task (USD, log scale)", fontsize=9)
+    ax.set_ylabel("Success Rate (%)", fontsize=9)
     ax.set_title(
         "Cost\u2013Quality Frontier: Routing Strategies",
-        fontsize=14,
+        fontsize=11,
         fontweight="bold",
+        pad=8,
     )
 
     min_rate = min(sr.success_rate * 100 for sr in strategies.values() if sr.results)
-    ax.set_ylim(max(0, min_rate - 15), 105)
-    ax.grid(True, alpha=0.3, linestyle="--")
+    ax.set_ylim(max(0, min_rate - 3), 102)
+    ax.grid(True, alpha=0.2, linestyle="--")
+    ax.tick_params(labelsize=8)
 
     ax.xaxis.set_major_formatter(FuncFormatter(lambda x, _: f"${x:.4f}"))
 
-    fig.text(
-        0.5,
-        0.02,
-        "\u2190 Cheaper                                                     "
-        "   More Expensive \u2192",
-        ha="center",
-        fontsize=9,
-        color="gray",
-        style="italic",
-    )
-
     path = Path(output_path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    fig.tight_layout(rect=[0, 0.04, 1, 1])
+    fig.tight_layout()
     fig.savefig(str(path), dpi=150, bbox_inches="tight")
     print(f"Plot saved to {path}")
 
