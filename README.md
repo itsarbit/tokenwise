@@ -33,10 +33,12 @@ Example output:
 
 ```
 Plan: 4 steps | Budget: $0.05 | Estimated: $0.0002
-Step 2 failed (nano) → escalated to mid
 
 Status: Success | Total cost: $0.0007 | Budget remaining: $0.0493
 ```
+
+If a step fails, TokenWise automatically escalates to a
+stronger model and retries within budget.
 
 ## Quick Start
 
@@ -122,7 +124,7 @@ response = client.chat.completions.create(
 
 ## Core Features
 
-- **Budget-aware routing** — strict cost ceilings enforced via `max_tokens` caps with 1.2x safety margin.
+- **Budget-aware routing** — cost ceilings enforced via `max_tokens` caps with conservative estimation ([details](#budget-semantics)).
 - **Tiered escalation** — budget, mid, flagship; escalates upward on failure, never downward.
 - **Capability-aware fallback** — routes and fallbacks filtered by `code`, `reasoning`, `math`, or `general`.
 - **Task decomposition** — LLM-powered planning with per-step model assignment and async DAG scheduling.
@@ -133,8 +135,8 @@ response = client.chat.completions.create(
 
 ![Cost-Quality Frontier](assets/pareto.png)
 
-TokenWise escalation achieves flagship-level reliability at
-~9x lower cost than flagship-only execution.
+In our benchmark, TokenWise escalation achieves flagship-level
+reliability at ~9x lower cost than flagship-only execution.
 
 `benchmarks/strategy_pareto.py` runs 20 tasks (simple,
 reasoning, coding, hard) across four strategies and validates
