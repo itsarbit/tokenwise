@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from tokenwise.executor import _MIN_OUTPUT_TOKENS, Executor
+from tokenwise.executor import Executor
 from tokenwise.models import Plan, Step, StepResult
 from tokenwise.registry import ModelRegistry
 
@@ -679,8 +679,8 @@ class TestMaxTokensGuardrail:
         """Step should fail gracefully when budget is too low for min output tokens."""
         executor = Executor(registry=sample_registry)
         # gpt-4.1-mini output_price=1.60/M → need $0.00016 for 100 tokens
-        # Give budget that yields fewer than _MIN_OUTPUT_TOKENS
-        tiny_budget = (_MIN_OUTPUT_TOKENS - 1) * (1.60 / 1_000_000)
+        # Give budget that yields fewer than min_output_tokens (default 100)
+        tiny_budget = (executor.min_output_tokens - 1) * (1.60 / 1_000_000)
         result = executor._execute_step(
             step_id=1,
             model_id="openai/gpt-4.1-mini",
@@ -689,6 +689,22 @@ class TestMaxTokensGuardrail:
         )
         assert not result.success
         assert "Budget too low" in result.error
+
+    def test_custom_min_output_tokens(self, sample_registry: ModelRegistry):
+        """Custom min_output_tokens allows smaller outputs under tight budgets."""
+        executor = Executor(registry=sample_registry, min_output_tokens=10)
+        assert executor.min_output_tokens == 10
+        # gpt-4.1-mini output_price=1.60/M → 10 tokens needs $0.000016
+        # Budget that yields 50 tokens — enough for min=10 but not for default=100
+        budget = 50 * (1.60 / 1_000_000)
+        result = executor._execute_step(
+            step_id=1,
+            model_id="openai/gpt-4.1-mini",
+            prompt="test",
+            budget_remaining=budget,
+        )
+        # Should NOT be skipped since 50 >= 10
+        assert result.success or "Budget too low" not in (result.error or "")
 
     def test_execute_step_skips_when_input_cost_exceeds_budget(
         self, sample_registry: ModelRegistry
@@ -769,7 +785,7 @@ class TestMaxTokensGuardrail:
     async def test_aexecute_step_skips_when_budget_too_low(self, sample_registry: ModelRegistry):
         """Async step should fail gracefully when budget is too low."""
         executor = Executor(registry=sample_registry)
-        tiny_budget = (_MIN_OUTPUT_TOKENS - 1) * (1.60 / 1_000_000)
+        tiny_budget = (executor.min_output_tokens - 1) * (1.60 / 1_000_000)
         result = await executor._aexecute_step(
             step_id=1,
             model_id="openai/gpt-4.1-mini",

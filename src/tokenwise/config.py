@@ -57,7 +57,12 @@ class Settings(BaseModel):
         default="",
         description="Path to ledger JSONL file (default: ~/.config/tokenwise/ledger.jsonl)",
     )
-    model_overrides: dict[str, dict] | None = Field(
+    min_output_tokens: int = Field(
+        default=100,
+        description="Minimum output tokens below which a step is skipped rather than producing "
+        "truncated output. Set lower for workflows that need tiny outputs under small budgets.",
+    )
+    model_overrides: dict[str, dict[str, Any]] | None = Field(
         default=None,
         description="Per-model capability/tier overrides",
     )
@@ -87,6 +92,7 @@ def load_settings(config_path: Path | None = None) -> Settings:
         "OPENAI_API_KEY": "openai_api_key",
         "ANTHROPIC_API_KEY": "anthropic_api_key",
         "GOOGLE_API_KEY": "google_api_key",
+        "TOKENWISE_MIN_OUTPUT_TOKENS": "min_output_tokens",
     }
 
     for env_var, field_name in env_map.items():

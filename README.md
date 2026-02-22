@@ -23,7 +23,7 @@ TokenWise is not just a model picker.
 It is a lightweight control layer for LLM systems that need:
 
 - **Strict budget enforcement** — hard cost ceilings that fail
-  fast, never silently overspend
+  fast, never silently overspend*
 - **Capability-aware routing** — routes and fallbacks filtered
   by what the task actually needs (code, reasoning, math)
 - **Deterministic escalation** — budget to mid to flagship,
@@ -105,7 +105,7 @@ corrections welcome via
 
 Enforce a strict maximum cost per request or workflow. If no
 model fits within the ceiling, TokenWise fails fast. No silent
-overspending.
+overspending.*
 
 ```python
 router = Router()
@@ -426,6 +426,7 @@ an optional config file (`~/.config/tokenwise/config.yaml`).
 | `TOKENWISE_PROXY_PORT` | Optional | Proxy bind port | `8000` |
 | `TOKENWISE_CACHE_TTL` | Optional | Registry cache TTL (s) | `3600` |
 | `TOKENWISE_LEDGER_PATH` | Optional | Ledger JSONL path | `~/.config/tokenwise/ledger.jsonl` |
+| `TOKENWISE_MIN_OUTPUT_TOKENS` | Optional | Min output tokens per step | `100` |
 | `TOKENWISE_LOCAL_MODELS` | Optional | Local models YAML | — |
 
 ```yaml
@@ -517,6 +518,15 @@ All three v0.3 limitations have been resolved:
 (Jupyter, FastAPI, etc.), it automatically falls back to
 sequential step execution. For concurrent DAG scheduling in
 async code, use `await executor.aexecute(plan)` directly.
+
+\* **Budget accuracy note:** TokenWise enforces budget ceilings
+by capping `max_tokens` before each LLM call. Input token counts
+are estimated using a `chars / 4` heuristic with a 1.2x safety
+margin — not a tokenizer. This means actual input cost may differ
+slightly from the estimate. The budget ceiling is real and
+enforced, but small overruns are possible when the heuristic
+underestimates input tokens. A future release will support
+pluggable tokenizer-based estimation for stricter guarantees.
 
 ## Development
 

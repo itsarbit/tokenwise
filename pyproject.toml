@@ -46,6 +46,7 @@ dev = [
     "mypy",
     "ruff",
     "respx",
+    "types-pyyaml>=6.0.12.20250915",
 ]
 benchmark = ["matplotlib"]
 

@@ -2,15 +2,22 @@
 
 All notable changes to TokenWise will be documented in this file.
 
-## [0.4.3] - 2026-02-21
+## [0.4.3] - 2026-02-22
 
 ### Fixed
 - **Total-cost-aware budget enforcement** — `_compute_max_tokens` now subtracts estimated input token cost before computing the output cap, ensuring total cost (input + output) stays within the budget ceiling; previously only output price was considered, allowing input cost to push total spend over budget
 
 ### Added
+- **Configurable minimum output tokens** — `min_output_tokens` is now a setting (env: `TOKENWISE_MIN_OUTPUT_TOKENS`, config file, or `Executor(min_output_tokens=N)`); defaults to 100; set lower for workflows that need tiny outputs under small budgets
 - **Pareto benchmark script** — `benchmarks/pareto.py` runs tasks across model tiers, saves results to CSV, and generates a cost-vs-quality scatter plot; supports `--dry-run`, `--csv`, and `--models` flags
 - **Example section** — new README section with copy-paste CLI commands and example output
 - **`benchmark` dependency group** — `matplotlib` available via `uv sync --group benchmark`
+
+### Changed
+- **README budget accuracy footnote** — "never silently overspend" claim now footnoted to clarify that input token estimation is heuristic (`chars/4` + 1.2x safety margin), not tokenizer-based; budget ceiling is enforced but small overruns are possible
+
+### Fixed
+- **mypy strict compliance** — resolved all 20 mypy errors: added `types-PyYAML` stubs, annotated bare `dict` generics across proxy/registry/config, fixed `no-any-return` in providers, corrected `LLMProvider` protocol's `astream_completion` signature to match async generator implementations
 
 ## [0.4.2] - 2026-02-21
 

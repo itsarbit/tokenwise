@@ -6,6 +6,7 @@ import json
 import time
 from functools import lru_cache
 from pathlib import Path
+from typing import Any
 
 import httpx
 import yaml
@@ -19,14 +20,15 @@ from tokenwise.models import ModelInfo, ModelTier
 
 
 @lru_cache(maxsize=1)
-def _load_capability_map() -> list[dict]:
+def _load_capability_map() -> list[dict[str, Any]]:
     """Load the curated model-family capability mapping from package data."""
     data_path = Path(__file__).parent / "data" / "model_capabilities.json"
     with open(data_path) as f:
-        return json.load(f)["families"]
+        families: list[dict[str, Any]] = json.load(f)["families"]
+        return families
 
 
-def _match_family(model_id: str) -> dict | None:
+def _match_family(model_id: str) -> dict[str, Any] | None:
     """Find the first matching family entry for a model ID via prefix match."""
     families = _load_capability_map()
     model_lower = model_id.lower()
@@ -71,7 +73,7 @@ def _infer_tier_from_price(input_price: float) -> ModelTier:
 # ---------------------------------------------------------------------------
 
 
-def _has_vision(api_data: dict) -> bool:
+def _has_vision(api_data: dict[str, Any]) -> bool:
     """Check if the model supports image input based on OpenRouter modality."""
     modality = api_data.get("architecture", {}).get("modality", "")
     return "image" in modality.lower()
@@ -102,7 +104,7 @@ def _apply_overrides(
 # ---------------------------------------------------------------------------
 
 
-def _parse_openrouter_model(data: dict) -> ModelInfo:
+def _parse_openrouter_model(data: dict[str, Any]) -> ModelInfo:
     """Parse an OpenRouter API model entry into ModelInfo."""
     model_id = data.get("id", "")
     name = data.get("name", model_id)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 import httpx
@@ -22,13 +23,14 @@ _DIRECT_PROVIDERS: dict[str, tuple[str, str]] = {
 }
 
 
-def _import_class(dotted_path: str) -> type:
+def _import_class(dotted_path: str) -> type[Any]:
     """Import a class from a dotted module path."""
     module_path, class_name = dotted_path.rsplit(".", 1)
     import importlib
 
     module = importlib.import_module(module_path)
-    return getattr(module, class_name)
+    cls: type[Any] = getattr(module, class_name)
+    return cls
 
 
 class ProviderResolver:
@@ -78,8 +80,9 @@ class ProviderResolver:
     def _get_or_create(
         self,
         key: str,
-        factory: Any,
+        factory: Callable[[], Any],
     ) -> LLMProvider:
         if key not in self._cache:
             self._cache[key] = factory()
-        return self._cache[key]
+        provider: LLMProvider = self._cache[key]
+        return provider

@@ -8,6 +8,7 @@ from typing import Any
 
 import httpx
 
+from tokenwise.config import get_settings
 from tokenwise.models import CostLedger, ModelInfo, ModelTier, Plan, PlanResult, Step, StepResult
 from tokenwise.providers import ProviderResolver
 from tokenwise.registry import ModelRegistry
@@ -16,9 +17,6 @@ logger = logging.getLogger(__name__)
 
 # HTTP status codes that indicate the model itself is unusable (not a transient error)
 _MODEL_UNUSABLE_CODES = {402, 403, 404}
-
-# Minimum output tokens below which we skip the step rather than producing truncated junk
-_MIN_OUTPUT_TOKENS = 100
 
 # Safety margin multiplier on input token estimates to account for tokenizer variance
 _INPUT_TOKEN_SAFETY_MARGIN = 1.2
@@ -37,10 +35,17 @@ class BudgetExhaustedError(Exception):
 class Executor:
     """Executes a Plan step by step, tracking token usage and cost."""
 
-    def __init__(self, registry: ModelRegistry | None = None) -> None:
+    def __init__(
+        self,
+        registry: ModelRegistry | None = None,
+        min_output_tokens: int | None = None,
+    ) -> None:
         self.registry = registry or ModelRegistry()
         self._resolver = ProviderResolver()
         self._failed_models: set[str] = set()
+        self.min_output_tokens = (
+            min_output_tokens if min_output_tokens is not None else get_settings().min_output_tokens
+        )
 
     def execute(self, plan: Plan) -> PlanResult:
         """Execute all steps in a plan, using async DAG scheduling when possible.
@@ -315,12 +320,13 @@ class Executor:
         raw_estimate = max(estimated_input_tokens, prompt_based_estimate)
         input_tokens = int(raw_estimate * _INPUT_TOKEN_SAFETY_MARGIN)
         max_tokens = self._compute_max_tokens(model_id, budget_remaining, input_tokens)
-        if max_tokens is not None and max_tokens < _MIN_OUTPUT_TOKENS:
+        if max_tokens is not None and max_tokens < self.min_output_tokens:
             return StepResult(
                 step_id=step_id,
                 model_id=model_id,
                 success=False,
-                error=f"Budget too low: {max_tokens} output tokens < minimum {_MIN_OUTPUT_TOKENS}",
+                error=f"Budget too low: {max_tokens} output tokens "
+                f"< minimum {self.min_output_tokens}",
             )
 
         try:
@@ -468,12 +474,13 @@ class Executor:
         raw_estimate = max(estimated_input_tokens, prompt_based_estimate)
         input_tokens = int(raw_estimate * _INPUT_TOKEN_SAFETY_MARGIN)
         max_tokens = self._compute_max_tokens(model_id, budget_remaining, input_tokens)
-        if max_tokens is not None and max_tokens < _MIN_OUTPUT_TOKENS:
+        if max_tokens is not None and max_tokens < self.min_output_tokens:
             return StepResult(
                 step_id=step_id,
                 model_id=model_id,
                 success=False,
-                error=f"Budget too low: {max_tokens} output tokens < minimum {_MIN_OUTPUT_TOKENS}",
+                error=f"Budget too low: {max_tokens} output tokens "
+                f"< minimum {self.min_output_tokens}",
             )
 
         try:

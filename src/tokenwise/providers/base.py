@@ -46,7 +46,7 @@ class LLMProvider(Protocol):
         """Async chat completion. Returns OpenAI-format response."""
         ...
 
-    async def astream_completion(
+    def astream_completion(
         self,
         model: str,
         messages: list[dict[str, Any]],

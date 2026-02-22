@@ -7,6 +7,7 @@ import time
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from typing import Any
 
 import httpx
 from fastapi import FastAPI, HTTPException
@@ -104,7 +105,7 @@ app = FastAPI(
 
 
 @app.get("/v1/models")
-async def list_models() -> dict:
+async def list_models() -> dict[str, Any]:
     """List available models (OpenAI-compatible)."""
     state.registry.ensure_loaded()
     models = state.registry.list_all()
@@ -124,8 +125,8 @@ async def list_models() -> dict:
 
 async def _forward_to_upstream(
     model_id: str,
-    payload: dict,
-) -> dict:
+    payload: dict[str, Any],
+) -> dict[str, Any]:
     """Forward a request to the resolved LLM provider. Returns parsed JSON."""
     provider, provider_model = state.resolver.resolve(model_id)
     messages = payload.get("messages", [])
@@ -185,7 +186,7 @@ def _get_fallback_models(exclude: set[str], failed_model_id: str | None = None) 
 
 def _resolve_model_and_payload(
     request: ChatCompletionRequest,
-) -> tuple[str, bool, dict]:
+) -> tuple[str, bool, dict[str, Any]]:
     """Resolve model ID and build payload."""
     settings = get_settings()
 
@@ -208,7 +209,7 @@ def _resolve_model_and_payload(
     else:
         model_id = request.model
 
-    payload: dict = {
+    payload: dict[str, Any] = {
         "messages": [{"role": m.role, "content": m.content} for m in request.messages],
     }
     if request.temperature is not None:
@@ -302,7 +303,7 @@ async def chat_completions(
 async def _handle_streaming(
     model_id: str,
     is_auto: bool,
-    payload: dict,
+    payload: dict[str, Any],
 ) -> StreamingResponse:
     """Forward a streaming request via the provider abstraction."""
     tried: set[str] = state.failed_models.to_set()
@@ -333,7 +334,7 @@ async def _handle_streaming(
             )
 
             # Wrap the provider's async generator to add SSE framing
-            async def _generate(gen):  # type: ignore[no-untyped-def]  # noqa: ANN202
+            async def _generate(gen: AsyncIterator[str]) -> AsyncIterator[str]:
                 async for line in gen:
                     if line:
                         yield f"{line}\n\n"
@@ -372,7 +373,7 @@ async def _handle_streaming(
 
 
 @app.get("/health")
-async def health() -> dict:
+async def health() -> dict[str, str]:
     """Health check endpoint."""
     from tokenwise import __version__
 

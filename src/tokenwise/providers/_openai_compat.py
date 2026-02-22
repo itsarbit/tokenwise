@@ -67,7 +67,8 @@ class OpenAICompatibleProvider:
             timeout=timeout,
         )
         resp.raise_for_status()
-        return resp.json()
+        result: dict[str, Any] = resp.json()
+        return result
 
     # -- Async ---------------------------------------------------------------
 
@@ -93,7 +94,8 @@ class OpenAICompatibleProvider:
                 timeout=timeout,
             )
             resp.raise_for_status()
-            return resp.json()
+            result: dict[str, Any] = resp.json()
+            return result
 
     async def astream_completion(
         self,
