@@ -149,9 +149,9 @@ The star marks the TokenWise escalation strategy, which uses `Router.route()`
 with escalating strategies (cheapest → balanced → best_quality) and retries
 on validation failure. Baselines use a single fixed model for all tasks.*
 
-On a 20-task benchmark set (5 simple, 5 reasoning, 5 coding, 5 hard),
-TokenWise escalation is the only strategy to achieve 100% success —
-at ~5x lower average cost per task than flagship-only.
+On this 20-task benchmark set, TokenWise Escalation is the only
+strategy that reaches 100% success, at about 5x lower average cost
+per task than Flagship Only.
 
 | Strategy | Success | Avg Cost / Task | Models |
 |---|---|---|---|
