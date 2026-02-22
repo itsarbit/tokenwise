@@ -117,6 +117,12 @@ model = router.route(
 # Raises ValueError if nothing fits
 ```
 
+The executor caps `max_tokens` per call using a 1.2x safety
+margin on input token estimates. Steps producing fewer than
+`min_output_tokens` (default 100) are skipped — configure via
+`TOKENWISE_MIN_OUTPUT_TOKENS` or `Executor(min_output_tokens=N)`
+for workflows that need tiny outputs under tight budgets.
+
 ### Tiered Escalation
 
 Three model tiers: **budget**, **mid**, **flagship**.
@@ -207,8 +213,7 @@ tokenwise models
 **Python API:**
 
 ```python
-from tokenwise import Router, Planner
-from tokenwise.executor import Executor
+from tokenwise import Router, Planner, Executor
 
 # Route a single query
 router = Router()
@@ -470,16 +475,18 @@ designed with that philosophy.
 ## Benchmarks
 
 `benchmarks/pareto.py` runs 5 tasks across models at different
-price tiers and reports cost vs success rate. Reproduce it:
+price tiers and reports cost vs success rate. Single command to
+reproduce (outputs `benchmarks/results.csv` and
+`benchmarks/pareto.png`):
 
 ```bash
-uv sync --group benchmark  # installs matplotlib
-uv run python benchmarks/pareto.py --models \
-  openai/gpt-4.1-nano deepseek/deepseek-chat \
-  openai/gpt-4.1-mini google/gemini-2.5-flash \
-  openai/gpt-4.1 anthropic/claude-sonnet-4 \
-  google/gemini-2.5-pro anthropic/claude-opus-4.6 \
-  openai/o4-mini google/gemini-3.1-pro-preview
+uv sync --group benchmark && uv run python benchmarks/pareto.py \
+  --models openai/gpt-4.1-nano deepseek/deepseek-chat \
+    openai/gpt-4.1-mini google/gemini-2.5-flash \
+    openai/gpt-4.1 anthropic/claude-sonnet-4 \
+    google/gemini-2.5-pro anthropic/claude-opus-4.6 \
+    openai/o4-mini google/gemini-3.1-pro-preview \
+  --csv benchmarks/results.csv --output benchmarks/pareto.png
 ```
 
 Sample results (February 2026, 5 simple tasks per model):
@@ -500,7 +507,7 @@ Sample results (February 2026, 5 simple tasks per model):
 All models pass simple tasks — the value shows in cost: ~85x
 spread between cheapest and most expensive. Harder tasks
 (multi-step reasoning, long-context coding) will show quality
-differentiation. Use `--csv` to save raw results.
+differentiation.
 
 ## Known Limitations (v0.4)
 
