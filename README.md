@@ -140,37 +140,65 @@ response = client.chat.completions.create(
 - **Cost ledger** — structured per-call accounting including failures and retries, persisted to JSONL.
 - **Multi-provider failover** — OpenRouter, OpenAI, Anthropic, and Google with connection pooling.
 
-## Benchmarks
+## Benchmark: Cost–Quality Frontier
 
-![Cost-Quality Frontier](assets/pareto.png)
+![Routing Strategies](assets/pareto.png)
 
-In our benchmark, TokenWise escalation achieves flagship-level
-reliability at ~9x lower cost than flagship-only execution.
+*X-axis: average cost per task (USD, log scale). Y-axis: success rate (%).
+The star marks the TokenWise escalation strategy, which uses `Router.route()`
+with escalating strategies (cheapest → balanced → best_quality) and retries
+on validation failure. Baselines use a single fixed model for all tasks.*
 
-`benchmarks/strategy_pareto.py` runs 20 tasks (simple,
-reasoning, coding, hard) across four strategies and validates
-answer correctness. Single command to reproduce:
+On a 20-task benchmark set (5 simple, 5 reasoning, 5 coding, 5 hard),
+TokenWise escalation is the only strategy to achieve 100% success —
+at ~5x lower average cost per task than flagship-only.
+
+| Strategy | Success | Avg Cost / Task | Models |
+|---|---|---|---|
+| Budget Only | 85% | $0.000177 | gpt-4.1-nano |
+| Mid Only | 90% | $0.003842 | gpt-4.1 |
+| Flagship Only | 95% | $0.009492 | claude-sonnet-4 |
+| **TokenWise Escalation** | **100%** | **$0.001985** | Router-selected |
+
+In multi-step workflows (10–50 steps), the per-step savings compound:
+a 5x reduction per step means 5x for the entire workflow.  With more
+steps there are more opportunities for escalation to save on easy
+sub-tasks while still escalating when needed.
+
+**Success metric:** 15 of 20 tasks have dedicated validators (reasoning
+correctness, code structure, substantiveness checks). The remaining 5
+simple tasks use a length-check fallback (>20 chars). Validators are
+defined in `benchmarks/strategy_pareto.py`.
+
+**Budget:** $0.03/task soft target — used for Router model filtering
+but not enforced as a hard ceiling.
+
+### How to reproduce
 
 ```bash
-uv sync --group benchmark && uv run python benchmarks/strategy_pareto.py
+# Requires an OpenRouter API key (or direct provider keys)
+export OPENROUTER_API_KEY="sk-or-..."
+
+uv sync --group benchmark
+uv run python benchmarks/strategy_pareto.py
 ```
 
-Results (February 2026, 20 tasks per strategy):
+Generated artifacts:
 
-| Strategy | Success | Avg Cost / Task |
-|---|---|---|
-| Budget Only (gpt-4.1-nano) | 90% | $0.000183 |
-| Mid Only (gpt-4.1) | 90% | $0.003573 |
-| Flagship Only (claude-sonnet-4) | 100% | $0.009354 |
-| **TokenWise Escalation** | **100%** | **$0.001009** |
+| File | Contents |
+|---|---|
+| `assets/pareto.png` | Cost–quality scatter plot |
+| `benchmarks/strategy_results.csv` | Per-task results: strategy, task, category, success, cost, model, escalated, latency, budget, budget_violation |
 
-Budget-only is cheapest but gets reasoning tasks wrong.
-Flagship is strongest but 51x more expensive. Escalation
-starts cheap, detects failures, and upgrades — achieving
-100% success at a fraction of the flagship cost. This
-matters when deploying multi-step LLM workflows in
-production, where cost compounds across retries and task
-decomposition.
+Use `--dry-run` to preview the plan without making API calls.
+
+### Limitations
+
+- Small task set (20 tasks across 4 categories); not a comprehensive LLM benchmark.
+- Validators are heuristic — they check for known correct patterns, not full semantic correctness.
+- Model pricing and availability change over time; results are provider-dependent.
+- Single-run results; no confidence intervals. The run date is printed in the script output.
+- Escalation in the benchmark uses a validation-retry loop; in production, the Executor escalates on execution failure.
 
 ## Comparison
 

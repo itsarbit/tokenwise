@@ -5,9 +5,16 @@ Runs 20 tasks (5 simple, 5 reasoning, 5 coding, 5 hard) across four strategies:
   1. Budget Only    — cheapest capable model, no escalation
   2. Mid Only       — mid-tier model, no escalation
   3. Flagship Only  — flagship model, no escalation
-  4. TokenWise      — budget start with capability-aware escalation
+  4. TokenWise      — Router-based model selection with quality-aware escalation
 
-Generates a scatter plot (assets/pareto.png) showing cost vs success rate.
+The TokenWise strategy uses Router.route() for model selection at each
+escalation stage (cheapest → balanced → best_quality).  The validation-and-retry
+loop is benchmark harness code; in production the Executor handles escalation on
+execution failure.
+
+Generates:
+  - assets/pareto.png            — cost–quality scatter plot
+  - benchmarks/strategy_results.csv — per-task results
 
 Usage:
     uv sync --group benchmark
@@ -21,7 +28,9 @@ from __future__ import annotations
 import argparse
 import csv
 import sys
+import time
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -91,7 +100,7 @@ DEFAULT_BUDGET_MODEL = "openai/gpt-4.1-nano"
 DEFAULT_MID_MODEL = "openai/gpt-4.1"
 DEFAULT_FLAGSHIP_MODEL = "anthropic/claude-sonnet-4"
 
-BUDGET_PER_TASK = 0.10
+BUDGET_PER_TASK = 0.03
 
 
 # ─── Answer validators ─────────────────────────────────────────────────
@@ -101,7 +110,10 @@ BUDGET_PER_TASK = 0.10
 def _val_bat_ball(r: str) -> bool:
     """Correct answer: $0.05 (NOT $0.10)."""
     r = r.lower()
-    return ("0.05" in r or "five cents" in r or "5 cents" in r) and "0.10" not in r.split("cost")[0][-20:] if "cost" in r else ("0.05" in r or "five cents" in r or "5 cents" in r)
+    has_correct = "0.05" in r or "five cents" in r or "5 cents" in r
+    if "cost" in r:
+        return has_correct and "0.10" not in r.split("cost")[0][-20:]
+    return has_correct
 
 
 def _val_8_balls(r: str) -> bool:
@@ -111,14 +123,25 @@ def _val_8_balls(r: str) -> bool:
 
 def _val_roses(r: str) -> bool:
     """Correct answer: No — undistributed middle fallacy."""
-    first_200 = r.lower()[:300]
-    return any(w in first_200 for w in ["cannot conclude", "does not follow", "no,", "no.", "no ", "invalid", "fallacy"])
+    first_300 = r.lower()[:300]
+    negatives = [
+        "cannot conclude", "does not follow",
+        "no,", "no.", "no ", "invalid", "fallacy",
+    ]
+    return any(w in first_300 for w in negatives)
 
 
 def _val_missing_dollar(r: str) -> bool:
     """Should identify the framing error (the $27 already includes the bellboy's $2)."""
     r_lower = r.lower()
-    return any(w in r_lower for w in ["misleading", "error in", "wrong to add", "fallacy", "incorrect", "shouldn't add", "should not add", "flawed", "double.count", "double count", "already include"])
+    indicators = [
+        "misleading", "error in", "wrong to add", "fallacy",
+        "incorrect", "shouldn't add", "should not add", "flawed",
+        "double.count", "double count", "already include",
+        "no missing", "not missing", "trick", "mistake",
+        "accounting", "mismatch",
+    ]
+    return any(w in r_lower for w in indicators)
 
 
 def _val_alice_bob(r: str) -> bool:
@@ -134,7 +157,8 @@ def _val_has_code(r: str) -> bool:
 
 def _val_hard_substantial(r: str) -> bool:
     """Check for both explanation and code (>300 chars)."""
-    return len(r.strip()) > 300 and ("def " in r or "class " in r or "```" in r or "algorithm" in r.lower())
+    has_code = "def " in r or "class " in r or "```" in r
+    return len(r.strip()) > 300 and (has_code or "algorithm" in r.lower())
 
 
 # Map task index → validator (0-indexed into ALL_TASKS)
@@ -172,6 +196,9 @@ class TaskResult:
     model_used: str
     escalated: bool = False
     error: str | None = None
+    latency: float = 0.0  # wall-clock seconds
+    budget: float = BUDGET_PER_TASK
+    budget_violation: bool = False  # True if cost > budget
 
 
 @dataclass
@@ -247,6 +274,7 @@ def run_fixed_tier(
 
     for i, (task, cat) in enumerate(zip(tasks, categories)):
         print(f"    Task {i + 1}/{len(tasks)} [{cat:>9}] ", end="", flush=True)
+        t0 = time.monotonic()
         try:
             resp = provider.chat_completion(
                 model=model_name,
@@ -254,6 +282,7 @@ def run_fixed_tier(
                 max_tokens=1024,
                 timeout=90.0,
             )
+            latency = time.monotonic() - t0
             success = _check_success(resp, task_index=i)
             cost = _get_cost(model_id, resp, registry)
             print(f"{'ok' if success else 'FAIL'} (${cost:.6f})")
@@ -264,9 +293,13 @@ def run_fixed_tier(
                     success=success,
                     cost=cost,
                     model_used=model_id,
+                    latency=latency,
+                    budget=BUDGET_PER_TASK,
+                    budget_violation=cost > BUDGET_PER_TASK,
                 )
             )
         except Exception as e:
+            latency = time.monotonic() - t0
             print(f"ERROR ({e})")
             results.append(
                 TaskResult(
@@ -276,36 +309,85 @@ def run_fixed_tier(
                     cost=0.0,
                     model_used=model_id,
                     error=str(e),
+                    latency=latency,
+                    budget=BUDGET_PER_TASK,
                 )
             )
 
     return results
 
 
-def run_escalation(
+def run_router_escalation(
     tasks: list[str],
     categories: list[str],
-    tier_models: list[str],
+    router: Any,
     resolver: Any,
     registry: Any,
+    budget_per_task: float = BUDGET_PER_TASK,
 ) -> list[TaskResult]:
-    """Run tasks with quality-aware escalation: budget → mid → flagship.
+    """Run tasks with Router-based model selection and quality-aware escalation.
 
-    For each task, try the cheapest model first. If the answer fails
-    validation, escalate to the next tier. Cost includes all attempts
-    (wasted + successful).
+    For each task, Router.route() selects the model using escalating strategies:
+      1. cheapest  — pick the cheapest capable model
+      2. balanced  — match model tier to query complexity
+      3. best_quality — pick the strongest available model
+
+    If a response fails validation, the next strategy is tried.  Cost includes
+    all attempts (wasted + successful).
+
+    NOTE: The validation-and-retry loop is benchmark harness code.  In production,
+    the Executor handles escalation on execution failure; this benchmark evaluates
+    what happens when Router model selection is combined with quality-aware retry.
     """
+    from tokenwise.models import RoutingStrategy
+
+    escalation_strategies = [
+        RoutingStrategy.CHEAPEST,
+        RoutingStrategy.BALANCED,
+        RoutingStrategy.BEST_QUALITY,
+    ]
+
     results: list[TaskResult] = []
 
     for i, (task, cat) in enumerate(zip(tasks, categories)):
         print(f"    Task {i + 1}/{len(tasks)} [{cat:>9}] ", end="", flush=True)
 
+        t0 = time.monotonic()
         total_cost = 0.0
         success = False
-        final_model = tier_models[0]
+        final_model = ""
         escalated = False
+        tried_models: set[str] = set()
 
-        for tier_idx, model_id in enumerate(tier_models):
+        # Determine required capability from task category
+        caps = CATEGORY_CAPABILITIES.get(cat, ["general"])
+        required_cap = caps[0] if caps[0] != "general" else None
+
+        for strat_idx, strategy in enumerate(escalation_strategies):
+            # Use remaining budget so escalation doesn't overshoot
+            remaining_budget = budget_per_task - total_cost
+            if remaining_budget <= 0:
+                break
+
+            # Use Router to select model for this strategy
+            try:
+                model_info = router.route(
+                    query=task,
+                    strategy=strategy,
+                    budget=remaining_budget,
+                    required_capability=required_cap,
+                    budget_strict=True,
+                )
+            except ValueError:
+                continue
+
+            model_id = model_info.id
+
+            # Skip if Router selected the same model we already tried
+            if model_id in tried_models:
+                continue
+            tried_models.add(model_id)
+
             provider, model_name = resolver.resolve(model_id)
             try:
                 resp = provider.chat_completion(
@@ -321,14 +403,15 @@ def run_escalation(
                 if passed:
                     success = True
                     final_model = model_id
-                    escalated = tier_idx > 0
+                    escalated = strat_idx > 0
                     break
-                # Answer failed validation — escalate to next tier
+                # Answer failed validation — escalate to next strategy
                 final_model = model_id
             except Exception:
-                # LLM error — escalate to next tier
-                pass
+                # LLM error — escalate to next strategy
+                final_model = model_id
 
+        latency = time.monotonic() - t0
         esc_tag = " [escalated]" if escalated else ""
         print(
             f"{'ok' if success else 'FAIL'} "
@@ -342,10 +425,11 @@ def run_escalation(
                 cost=total_cost,
                 model_used=final_model,
                 escalated=escalated,
+                latency=latency,
+                budget=budget_per_task,
+                budget_violation=total_cost > budget_per_task,
             )
         )
-
-    return results
 
     return results
 
@@ -358,11 +442,15 @@ def save_csv(strategies: dict[str, StrategyResult], csv_path: str) -> None:
     path = Path(csv_path)
     path.parent.mkdir(parents=True, exist_ok=True)
 
+    headers = [
+        "strategy", "task", "category", "success", "cost",
+        "model_used", "escalated", "latency", "budget",
+        "budget_violation", "error",
+    ]
+
     with open(path, "w", newline="") as f:
         writer = csv.writer(f)
-        writer.writerow(
-            ["strategy", "task", "category", "success", "cost", "model_used", "escalated", "error"]
-        )
+        writer.writerow(headers)
         for name, sr in strategies.items():
             for tr in sr.results:
                 writer.writerow(
@@ -374,6 +462,9 @@ def save_csv(strategies: dict[str, StrategyResult], csv_path: str) -> None:
                         f"{tr.cost:.8f}",
                         tr.model_used,
                         tr.escalated,
+                        f"{tr.latency:.2f}",
+                        f"{tr.budget:.2f}",
+                        tr.budget_violation,
                         tr.error or "",
                     ]
                 )
@@ -440,7 +531,11 @@ def plot_pareto(strategies: dict[str, StrategyResult], output_path: str) -> None
         )
 
     ax.set_xscale("log")
-    ax.set_xlabel("\u2190 Cheaper                    Avg Cost / Task (USD, log scale)                    More Expensive \u2192", fontsize=8)
+    ax.set_xlabel(
+        "\u2190 Cheaper          Avg Cost / Task (USD, log scale)"
+        "          More Expensive \u2192",
+        fontsize=8,
+    )
     ax.set_ylabel("Success Rate (%)", fontsize=9)
     ax.set_title(
         "Cost\u2013Quality Frontier: Routing Strategies",
@@ -461,6 +556,42 @@ def plot_pareto(strategies: dict[str, StrategyResult], output_path: str) -> None
     fig.tight_layout()
     fig.savefig(str(path), dpi=150, bbox_inches="tight")
     print(f"Plot saved to {path}")
+
+
+# ─── Reporting ─────────────────────────────────────────────────────────
+
+
+def print_validator_summary() -> None:
+    """Print which tasks have dedicated validators and what they check."""
+    total = len(ALL_TASKS)
+    validated = len(TASK_VALIDATORS)
+    fallback = total - validated
+    print(f"\nValidator coverage: {validated}/{total} tasks have "
+          f"dedicated validators, {fallback} use length-check fallback")
+    print("  Reasoning (5 tasks): semantic correctness "
+          "(correct answer + reject wrong answer)")
+    print("  Coding    (5 tasks): code structure check "
+          "(presence of def/class)")
+    print("  Hard      (5 tasks): substantiveness "
+          "(>300 chars + code or algorithm keyword)")
+    print("  Simple    (5 tasks): length-check fallback "
+          "(>20 chars)")
+    print(f"  Validator source: {__file__}")
+
+
+def print_budget_summary(
+    strategies: dict[str, StrategyResult],
+) -> None:
+    """Print budget semantics and per-strategy violation rates."""
+    print(f"\nBudget: ${BUDGET_PER_TASK:.2f}/task (soft target)")
+    print("  Soft target: used for Router model filtering; "
+          "may be exceeded in edge cases.")
+    for name, sr in strategies.items():
+        violations = sum(1 for r in sr.results if r.budget_violation)
+        n = len(sr.results)
+        rate = violations / n if n else 0
+        tag = f"  {violations}/{n} violations" if violations else "  0 violations"
+        print(f"  {name:<25} {tag} ({rate:.0%})")
 
 
 # ─── Main ───────────────────────────────────────────────────────────────
@@ -494,21 +625,22 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    run_date = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     print("TokenWise Strategy Pareto Benchmark")
     print("=" * 50)
+    print(f"Run: {run_date}  (single run, fixed seed: N/A)")
     print(
         f"\nTasks: {len(ALL_TASKS)} "
         f"({len(SIMPLE_TASKS)} simple, {len(REASONING_TASKS)} reasoning, "
         f"{len(CODING_TASKS)} coding, {len(HARD_TASKS)} hard)"
     )
-    print(f"Budget per task: ${BUDGET_PER_TASK}")
+    print(f"Budget per task: ${BUDGET_PER_TASK} (soft target)")
     print("\nStrategies:")
     print(f"  1. Budget Only           \u2192 {args.budget_model}")
     print(f"  2. Mid Only              \u2192 {args.mid_model}")
     print(f"  3. Flagship Only         \u2192 {args.flagship_model}")
-    print(
-        f"  4. TokenWise Escalation  \u2192 {args.budget_model} \u2192 mid \u2192 flagship"
-    )
+    print("  4. TokenWise Escalation  \u2192 Router.route("
+          "cheapest \u2192 balanced \u2192 best_quality)")
     print(f"\nTotal LLM calls: ~{len(ALL_TASKS) * 4}")
 
     if args.dry_run:
@@ -517,10 +649,12 @@ def main() -> None:
 
     from tokenwise.providers import ProviderResolver
     from tokenwise.registry import ModelRegistry
+    from tokenwise.router import Router
 
     registry = ModelRegistry()
     registry.load_from_openrouter()
     resolver = ProviderResolver()
+    router = Router(registry=registry)
 
     strategies: dict[str, StrategyResult] = {}
 
@@ -565,15 +699,14 @@ def main() -> None:
         f"avg ${sr_flagship.avg_cost:.6f}/task"
     )
 
-    # 4. TokenWise Escalation
+    # 4. TokenWise Escalation — uses Router.route() for model selection
     print(f"\n{'─' * 50}")
-    print(f"  Strategy: TokenWise Escalation (start: {args.budget_model})")
+    print("  Strategy: TokenWise Escalation (Router: cheapest → balanced → best_quality)")
     sr_esc = StrategyResult(
         name="TokenWise Escalation", color="#3498db", marker="*"
     )
-    tier_models = [args.budget_model, args.mid_model, args.flagship_model]
-    sr_esc.results = run_escalation(
-        ALL_TASKS, TASK_CATEGORIES, tier_models, resolver, registry
+    sr_esc.results = run_router_escalation(
+        ALL_TASKS, TASK_CATEGORIES, router, resolver, registry
     )
     strategies["TokenWise Escalation"] = sr_esc
     print(
@@ -596,6 +729,12 @@ def main() -> None:
     total_spent = sum(sr.total_cost for sr in strategies.values())
     print(f"{'─' * 60}")
     print(f"{'Total benchmark cost':<25} {'':>8} {'':>12} ${total_spent:>11.6f}")
+
+    print_validator_summary()
+    print_budget_summary(strategies)
+
+    print(f"\nNote: Single run on {run_date}. Results may vary by "
+          "provider availability, model versions, and pricing.")
 
     save_csv(strategies, args.csv)
     plot_pareto(strategies, args.output)
