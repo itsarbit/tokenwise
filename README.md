@@ -160,6 +160,8 @@ per task than Flagship Only.
 | Flagship Only | 95% | $0.009492 | claude-sonnet-4 |
 | **TokenWise Escalation** | **100%** | **$0.001985** | Router-selected |
 
+Single run with fixed seed. Results may vary across model versions and pricing updates.
+
 In multi-step workflows (10–50 steps), the per-step savings compound:
 a 5x reduction per step means 5x for the entire workflow.  With more
 steps there are more opportunities for escalation to save on easy
