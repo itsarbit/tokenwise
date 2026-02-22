@@ -33,14 +33,9 @@ Example output:
 
 ```
 Plan: 4 steps | Budget: $0.05 | Estimated: $0.0002
+Step 2 failed (nano) → escalated to mid
 
 Status: Success | Total cost: $0.0007 | Budget remaining: $0.0493
-```
-
-## Install
-
-```bash
-pip install tokenwise-llm
 ```
 
 ## Quick Start
@@ -139,7 +134,7 @@ response = client.chat.completions.create(
 ![Cost-Quality Frontier](assets/pareto.png)
 
 TokenWise escalation achieves flagship-level reliability at
-~9x lower cost than running flagship models exclusively.
+~9x lower cost than flagship-only execution.
 
 `benchmarks/strategy_pareto.py` runs 20 tasks (simple,
 reasoning, coding, hard) across four strategies and validates
@@ -161,13 +156,18 @@ Results (February 2026, 20 tasks per strategy):
 Budget-only is cheapest but gets reasoning tasks wrong.
 Flagship is strongest but 51x more expensive. Escalation
 starts cheap, detects failures, and upgrades — achieving
-100% success at a fraction of the flagship cost.
+100% success at a fraction of the flagship cost. This
+matters when deploying multi-step LLM workflows in
+production, where cost compounds across retries and task
+decomposition.
 
 ## Comparison
 
-High-level comparison of major LLM routing tools (as of
-February 2026). Corrections welcome via
-[issues](https://github.com/itsarbit/tokenwise/issues).
+Most routing tools optimize per-request model choice. TokenWise
+treats routing as a workflow-level control system.
+
+High-level comparison (as of February 2026). Corrections welcome
+via [issues](https://github.com/itsarbit/tokenwise/issues).
 
 | Feature | TokenWise | [RouteLLM](https://github.com/lm-sys/RouteLLM) | [LiteLLM](https://github.com/BerriAI/litellm) | [Not Diamond](https://notdiamond.ai) | [Martian](https://withmartian.com) | [Portkey](https://portkey.ai) | [OpenRouter](https://openrouter.ai) |
 |---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
