@@ -2,20 +2,22 @@
 """Pareto benchmark — cost vs quality scatter plot across model tiers.
 
 Runs a fixed set of short tasks through TokenWise's executor at different
-budget tiers, collects cost and success metrics, and generates a Pareto-front
-scatter plot.
+budget tiers, collects cost and success metrics, saves results to CSV, and
+generates a Pareto-front scatter plot.
 
 Usage:
-    uv run python benchmarks/pareto.py              # run benchmark + plot
-    uv run python benchmarks/pareto.py --dry-run     # show plan without executing
-    uv run python benchmarks/pareto.py --output out.png  # custom output path
+    uv run python benchmarks/pareto.py                # run benchmark + plot
+    uv run python benchmarks/pareto.py --dry-run      # show plan without executing
+    uv run python benchmarks/pareto.py --output out.png  # custom plot path
 """
 
 from __future__ import annotations
 
 import argparse
+import csv
 import sys
 from dataclasses import dataclass, field
+from pathlib import Path
 
 TASKS = [
     "Write a haiku about distributed systems",
@@ -84,17 +86,19 @@ def run_benchmark(model_ids: list[str]) -> dict[str, ModelResult]:
         print(f"\n  Model: {model_id} (${model.input_price}/M in, ${model.output_price}/M out)")
 
         for i, task in enumerate(TASKS):
+            est_cost = model.estimate_cost(200, 300)
             step = Step(
                 id=1,
                 description=task,
                 model_id=model_id,
                 estimated_input_tokens=200,
                 estimated_output_tokens=300,
+                estimated_cost=est_cost,
             )
             plan = Plan(
                 task=task,
                 steps=[step],
-                total_estimated_cost=step.estimated_cost,
+                total_estimated_cost=est_cost,
                 budget=BUDGET_PER_TASK,
             )
 
@@ -114,12 +118,44 @@ def run_benchmark(model_ids: list[str]) -> dict[str, ModelResult]:
     return results
 
 
+def save_csv(results: dict[str, ModelResult], csv_path: str) -> None:
+    """Save benchmark results to CSV."""
+    path = Path(csv_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    with open(path, "w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(
+            [
+                "model_id",
+                "tasks_run",
+                "successes",
+                "success_rate",
+                "total_cost",
+                "avg_cost",
+            ]
+        )
+        for model_id, mr in results.items():
+            writer.writerow(
+                [
+                    model_id,
+                    mr.tasks_run,
+                    mr.successes,
+                    f"{mr.success_rate:.4f}",
+                    f"{mr.total_cost:.8f}",
+                    f"{mr.avg_cost:.8f}",
+                ]
+            )
+
+    print(f"Results saved to {path}")
+
+
 def plot_pareto(results: dict[str, ModelResult], output_path: str) -> None:
     """Generate a Pareto-front scatter plot."""
     try:
         import matplotlib.pyplot as plt
     except ImportError:
-        print("\nmatplotlib not installed. Install with: uv add --group benchmark matplotlib")
+        print("\nmatplotlib not installed. Install with: uv sync --group benchmark")
         print("Skipping plot generation.")
         return
 
@@ -146,13 +182,22 @@ def plot_pareto(results: dict[str, ModelResult], output_path: str) -> None:
 
     fig.tight_layout()
     fig.savefig(output_path, dpi=150)
-    print(f"\nPlot saved to {output_path}")
+    print(f"Plot saved to {output_path}")
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="TokenWise Pareto benchmark")
     parser.add_argument("--dry-run", action="store_true", help="Show plan without executing")
-    parser.add_argument("--output", default="benchmarks/pareto.png", help="Output plot path")
+    parser.add_argument(
+        "--output",
+        default="benchmarks/pareto.png",
+        help="Output plot path",
+    )
+    parser.add_argument(
+        "--csv",
+        default="benchmarks/results.csv",
+        help="Output CSV path",
+    )
     parser.add_argument("--models", nargs="*", help="Specific model IDs to benchmark")
     args = parser.parse_args()
 
@@ -184,6 +229,7 @@ def main() -> None:
     for model_id, mr in results.items():
         print(f"  {model_id}: {mr.success_rate:.0%} success, avg ${mr.avg_cost:.6f}/task")
 
+    save_csv(results, args.csv)
     plot_pareto(results, args.output)
 
 
