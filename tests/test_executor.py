@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from tokenwise.executor import Executor
+from tokenwise.executor import _MIN_OUTPUT_TOKENS, Executor
 from tokenwise.models import Plan, Step, StepResult
 from tokenwise.registry import ModelRegistry
 
@@ -589,6 +589,30 @@ class TestExecutorAsync:
         assert len(result.skipped_steps) == 2
         assert len(result.step_results) == 0
 
+    async def test_aexecute_passes_estimated_cost_as_budget(self, sample_registry: ModelRegistry):
+        """_arun_step should receive estimated_cost (not 2x) as budget_remaining."""
+        executor = Executor(registry=sample_registry)
+        step = Step(
+            id=1,
+            description="Do something",
+            model_id="openai/gpt-4.1-mini",
+            estimated_cost=0.05,
+            depends_on=[],
+        )
+        plan = _make_plan([step], budget=1.0)
+
+        budgets_received: list[float] = []
+
+        async def mock_aexecute(step_id, model_id, prompt, budget_remaining):
+            budgets_received.append(budget_remaining)
+            return _mock_step_result(step_id, cost=0.01)
+
+        with patch.object(executor, "_aexecute_step", side_effect=mock_aexecute):
+            await executor.aexecute(plan)
+
+        # _arun_step should pass estimated_cost (0.05), not 2x (0.10)
+        assert budgets_received[0] == pytest.approx(0.05)
+
     async def test_aexecute_escalation_includes_failed_cost(self, sample_registry: ModelRegistry):
         """Async escalation should include the failed attempt cost in total."""
         executor = Executor(registry=sample_registry)
@@ -614,3 +638,92 @@ class TestExecutorAsync:
 
         # total_cost should include both the failed attempt (0.003) and escalated (0.005)
         assert result.total_cost == pytest.approx(0.008)
+
+
+class TestMaxTokensGuardrail:
+    """Tests for the max_tokens budget guardrail."""
+
+    def test_compute_max_tokens(self, sample_registry: ModelRegistry):
+        executor = Executor(registry=sample_registry)
+        # gpt-4.1-mini output_price = 1.60 per million tokens
+        # budget = $0.016 → 0.016 / (1.60 / 1_000_000) = 10_000 tokens
+        max_tok = executor._compute_max_tokens("openai/gpt-4.1-mini", 0.016)
+        assert max_tok == 10_000
+
+    def test_compute_max_tokens_unknown_model(self, sample_registry: ModelRegistry):
+        executor = Executor(registry=sample_registry)
+        assert executor._compute_max_tokens("nonexistent/model", 1.0) is None
+
+    def test_execute_step_skips_when_budget_too_low(self, sample_registry: ModelRegistry):
+        """Step should fail gracefully when budget is too low for min output tokens."""
+        executor = Executor(registry=sample_registry)
+        # gpt-4.1-mini output_price=1.60/M → need $0.00016 for 100 tokens
+        # Give budget that yields fewer than _MIN_OUTPUT_TOKENS
+        tiny_budget = (_MIN_OUTPUT_TOKENS - 1) * (1.60 / 1_000_000)
+        result = executor._execute_step(
+            step_id=1,
+            model_id="openai/gpt-4.1-mini",
+            prompt="test",
+            budget_remaining=tiny_budget,
+        )
+        assert not result.success
+        assert "Budget too low" in result.error
+
+    def test_execute_step_passes_max_tokens(self, sample_registry: ModelRegistry):
+        """_execute_step should pass max_tokens to provider when budget is set."""
+        from unittest.mock import MagicMock
+
+        executor = Executor(registry=sample_registry)
+        mock_provider = MagicMock()
+        mock_provider.chat_completion.return_value = {
+            "choices": [{"message": {"content": "ok"}}],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 10},
+        }
+
+        with patch.object(
+            executor._resolver, "resolve", return_value=(mock_provider, "gpt-4.1-mini")
+        ):
+            executor._execute_step(
+                step_id=1,
+                model_id="openai/gpt-4.1-mini",
+                prompt="test",
+                budget_remaining=0.016,
+            )
+        call_kwargs = mock_provider.chat_completion.call_args[1]
+        assert "max_tokens" in call_kwargs
+        assert call_kwargs["max_tokens"] == 10_000
+
+    async def test_aexecute_step_skips_when_budget_too_low(self, sample_registry: ModelRegistry):
+        """Async step should fail gracefully when budget is too low."""
+        executor = Executor(registry=sample_registry)
+        tiny_budget = (_MIN_OUTPUT_TOKENS - 1) * (1.60 / 1_000_000)
+        result = await executor._aexecute_step(
+            step_id=1,
+            model_id="openai/gpt-4.1-mini",
+            prompt="test",
+            budget_remaining=tiny_budget,
+        )
+        assert not result.success
+        assert "Budget too low" in result.error
+
+    async def test_aexecute_step_passes_max_tokens(self, sample_registry: ModelRegistry):
+        """_aexecute_step should pass max_tokens to async provider."""
+        executor = Executor(registry=sample_registry)
+        mock_provider = AsyncMock()
+        mock_provider.achat_completion.return_value = {
+            "choices": [{"message": {"content": "ok"}}],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 10},
+        }
+
+        with patch.object(
+            executor._resolver, "resolve", return_value=(mock_provider, "gpt-4.1-mini")
+        ):
+            await executor._aexecute_step(
+                step_id=1,
+                model_id="openai/gpt-4.1-mini",
+                prompt="test",
+                budget_remaining=0.016,
+            )
+        call_kwargs = mock_provider.achat_completion.call_args[1]
+        assert "max_tokens" in call_kwargs
+        assert call_kwargs["max_tokens"] == 10_000

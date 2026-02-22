@@ -222,6 +222,7 @@ class ModelRegistry:
     def find_models(
         self,
         capability: str | None = None,
+        capabilities: list[str] | None = None,
         max_input_price: float | None = None,
         tier: ModelTier | None = None,
         min_context: int | None = None,
@@ -232,6 +233,9 @@ class ModelRegistry:
 
         if capability:
             results = [m for m in results if capability in m.capabilities]
+        if capabilities:
+            cap_set = set(capabilities)
+            results = [m for m in results if cap_set.issubset(set(m.capabilities))]
         if max_input_price is not None:
             results = [m for m in results if m.input_price <= max_input_price]
         if tier:
@@ -242,9 +246,13 @@ class ModelRegistry:
         results.sort(key=lambda m: m.input_price)
         return results
 
-    def cheapest(self, capability: str | None = None) -> ModelInfo | None:
-        """Return the cheapest model, optionally filtered by capability."""
-        models = self.find_models(capability=capability)
+    def cheapest(
+        self,
+        capability: str | None = None,
+        capabilities: list[str] | None = None,
+    ) -> ModelInfo | None:
+        """Return the cheapest model, optionally filtered by capability/capabilities."""
+        models = self.find_models(capability=capability, capabilities=capabilities)
         # Filter out free models (price == 0) as they're often rate-limited
         paid = [m for m in models if m.input_price > 0]
         return paid[0] if paid else (models[0] if models else None)

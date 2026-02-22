@@ -37,7 +37,7 @@ SAMPLE_MODELS = [
         input_price=3.00,
         output_price=15.00,
         context_window=200_000,
-        capabilities=["general", "code", "reasoning", "creative", "vision"],
+        capabilities=["general", "code", "reasoning", "vision"],
         tier=ModelTier.MID,
     ),
     ModelInfo(
@@ -47,7 +47,7 @@ SAMPLE_MODELS = [
         input_price=15.00,
         output_price=75.00,
         context_window=200_000,
-        capabilities=["general", "code", "reasoning", "creative", "vision"],
+        capabilities=["general", "code", "reasoning", "vision"],
         tier=ModelTier.FLAGSHIP,
     ),
     ModelInfo(

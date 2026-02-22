@@ -35,7 +35,7 @@ Each subtask should be a single, focused step that can be handled by one LLM cal
 
 Return ONLY a JSON array of objects with these fields:
 - "description": what this step does
-- "capability": the type of skill needed ("code", "reasoning", "creative", "math", or "general")
+- "capability": the type of skill needed ("code", "reasoning", "math", or "general")
 - "estimated_input_tokens": approximate input tokens (integer)
 - "estimated_output_tokens": approximate output tokens (integer)
 - "depends_on": list of step indices (0-indexed) this step depends on, or [] if independent
@@ -304,18 +304,21 @@ class Planner:
             if overage <= 0:
                 break
 
-            # Use the step's explicit required capability when available,
+            # Use the step's explicit required capabilities when available,
             # fall back to the current model's first capability
-            cap = None
-            if step.required_capabilities:
-                cap = step.required_capabilities[0]
-            else:
+            caps = [c for c in step.required_capabilities if c != "general"]
+            if not caps:
                 current = self.registry.get_model(step.model_id)
                 if current and current.capabilities:
-                    cap = current.capabilities[0]
+                    caps = [c for c in current.capabilities if c != "general"][:1]
 
-            # Find cheapest model that still has the required capability
-            cheapest = self.registry.cheapest(capability=cap)
+            # Find cheapest model that still has all required capabilities
+            if len(caps) > 1:
+                cheapest = self.registry.cheapest(capabilities=caps)
+            elif len(caps) == 1:
+                cheapest = self.registry.cheapest(capability=caps[0])
+            else:
+                cheapest = self.registry.cheapest()
             if not cheapest:
                 cheapest = self.registry.cheapest()
             if cheapest and cheapest.id != step.model_id:

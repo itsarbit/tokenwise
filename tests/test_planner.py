@@ -294,3 +294,27 @@ class TestPlanner:
         downgraded = sample_registry.get_model(optimized.steps[0].model_id)
         assert downgraded is not None
         assert "code" in downgraded.capabilities
+
+    def test_optimize_for_budget_multi_capability(self, sample_registry: ModelRegistry):
+        """_optimize_for_budget with multiple capabilities should not lose any."""
+        planner = Planner(registry=sample_registry)
+        from tokenwise.models import Plan, Step
+
+        steps = [
+            Step(
+                id=1,
+                description="Complex step needing code + reasoning",
+                model_id="anthropic/claude-opus-4",
+                estimated_input_tokens=10000,
+                estimated_output_tokens=10000,
+                estimated_cost=0.90,
+                required_capabilities=["code", "reasoning"],
+            ),
+        ]
+        plan = Plan(task="Test", steps=steps, total_estimated_cost=0.90, budget=0.01)
+
+        optimized = planner._optimize_for_budget(plan)
+        downgraded = sample_registry.get_model(optimized.steps[0].model_id)
+        assert downgraded is not None
+        assert "code" in downgraded.capabilities
+        assert "reasoning" in downgraded.capabilities

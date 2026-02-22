@@ -2,6 +2,18 @@
 
 All notable changes to TokenWise will be documented in this file.
 
+## [0.4.2] - 2026-02-21
+
+### Fixed
+- **Remove "creative" capability** — removed unused `"creative"` capability from decomposition prompt, curated model mapping, and test fixtures; the router had no creative patterns so it was silently restricting fallback to Anthropic-only models
+- **Budget consistency in async executor** — `aexecute()` now passes `step.estimated_cost` (not `estimated_cost * 2`) as the budget for each step, matching the reservation amount
+- **Multi-capability downgrade** — `_optimize_for_budget` now checks *all* required capabilities when downgrading models, not just the first; prevents a step needing `["code", "reasoning"]` from being downgraded to a code-only model
+- **max_tokens budget guardrail** — `_execute_step` and `_aexecute_step` now compute and pass `max_tokens` based on remaining budget, preventing a single completion from overshooting; steps with budget below 100 output tokens are skipped gracefully
+
+### Changed
+- **README restructured** — moved blog post link to after Quick Start; softened absolute claims about cost ledger coverage
+- **Registry** — `find_models()` and `cheapest()` accept a `capabilities` list parameter for multi-capability filtering
+
 ## [0.4.1] - 2026-02-21
 
 ### Fixed

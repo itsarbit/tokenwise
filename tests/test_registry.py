@@ -166,6 +166,25 @@ class TestModelRegistry:
         assert model is not None
         assert "reasoning" in model.capabilities
 
+    def test_find_models_by_multiple_capabilities(self, sample_registry: ModelRegistry):
+        """find_models with capabilities=[...] returns only models having all."""
+        models = sample_registry.find_models(capabilities=["code", "reasoning"])
+        assert len(models) >= 1
+        for m in models:
+            assert "code" in m.capabilities
+            assert "reasoning" in m.capabilities
+
+    def test_cheapest_with_multiple_capabilities(self, sample_registry: ModelRegistry):
+        """cheapest(capabilities=[...]) returns cheapest model having all capabilities."""
+        model = sample_registry.cheapest(capabilities=["code", "reasoning"])
+        assert model is not None
+        assert "code" in model.capabilities
+        assert "reasoning" in model.capabilities
+        # Should be cheapest among models with both code + reasoning
+        all_matching = sample_registry.find_models(capabilities=["code", "reasoning"])
+        paid = [m for m in all_matching if m.input_price > 0]
+        assert model.input_price <= paid[0].input_price
+
     def test_list_all(self, sample_registry: ModelRegistry):
         models = sample_registry.list_all()
         assert len(models) == 7

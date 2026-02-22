@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from typing import Any
 
 import httpx
 
@@ -15,6 +16,9 @@ logger = logging.getLogger(__name__)
 
 # HTTP status codes that indicate the model itself is unusable (not a transient error)
 _MODEL_UNUSABLE_CODES = {402, 403, 404}
+
+# Minimum output tokens below which we skip the step rather than producing truncated junk
+_MIN_OUTPUT_TOKENS = 100
 
 _TIER_STRENGTH: dict[ModelTier, int] = {
     ModelTier.BUDGET: 0,
@@ -106,6 +110,7 @@ class Executor:
                 if not step_result.success and self._is_model_error(step_result):
                     self._failed_models.add(step.model_id)
 
+            # Record every attempt — success or failure — before considering escalation
             result.ledger.record(
                 reason=f"step {step.id} attempt 1",
                 model_id=step_result.model_id,
@@ -207,7 +212,7 @@ class Executor:
 
             # Execute launchable steps concurrently, each with its reserved budget
             tasks = [
-                self._arun_step(step, outputs, step.estimated_cost * 2, result.ledger)
+                self._arun_step(step, outputs, step.estimated_cost, result.ledger)
                 for step in launchable
             ]
             step_results = await asyncio.gather(*tasks)
@@ -262,6 +267,7 @@ class Executor:
             if not step_result.success and self._is_model_error(step_result):
                 self._failed_models.add(step.model_id)
 
+        # Record every attempt — success or failure — before considering escalation
         ledger.record(
             reason=f"step {step.id} attempt 1",
             model_id=step_result.model_id,
@@ -290,13 +296,25 @@ class Executor:
         budget_remaining: float,
     ) -> StepResult:
         """Execute a single step via async provider call."""
+        max_tokens = self._compute_max_tokens(model_id, budget_remaining)
+        if max_tokens is not None and max_tokens < _MIN_OUTPUT_TOKENS:
+            return StepResult(
+                step_id=step_id,
+                model_id=model_id,
+                success=False,
+                error=f"Budget too low: {max_tokens} output tokens < minimum {_MIN_OUTPUT_TOKENS}",
+            )
+
         try:
             provider, provider_model = self._resolver.resolve(model_id)
-            data = await provider.achat_completion(
-                model=provider_model,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.7,
-            )
+            kwargs: dict[str, Any] = {
+                "model": provider_model,
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.7,
+            }
+            if max_tokens is not None:
+                kwargs["max_tokens"] = max_tokens
+            data = await provider.achat_completion(**kwargs)
 
             content = data["choices"][0]["message"]["content"]
             usage = data.get("usage", {})
@@ -375,6 +393,16 @@ class Executor:
 
         return None
 
+    def _compute_max_tokens(self, model_id: str, budget_remaining: float) -> int | None:
+        """Compute max output tokens that fit within the remaining budget.
+
+        Returns None if the model is unknown or has no output pricing.
+        """
+        model = self.registry.get_model(model_id)
+        if not model or model.output_price <= 0:
+            return None
+        return int(budget_remaining / (model.output_price / 1_000_000))
+
     def _build_prompt(self, description: str, template: str, prior_outputs: dict[int, str]) -> str:
         """Build the prompt for a step, including prior context."""
         if template:
@@ -399,13 +427,25 @@ class Executor:
         budget_remaining: float,
     ) -> StepResult:
         """Execute a single step by calling the LLM."""
+        max_tokens = self._compute_max_tokens(model_id, budget_remaining)
+        if max_tokens is not None and max_tokens < _MIN_OUTPUT_TOKENS:
+            return StepResult(
+                step_id=step_id,
+                model_id=model_id,
+                success=False,
+                error=f"Budget too low: {max_tokens} output tokens < minimum {_MIN_OUTPUT_TOKENS}",
+            )
+
         try:
             provider, provider_model = self._resolver.resolve(model_id)
-            data = provider.chat_completion(
-                model=provider_model,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.7,
-            )
+            kwargs: dict[str, Any] = {
+                "model": provider_model,
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.7,
+            }
+            if max_tokens is not None:
+                kwargs["max_tokens"] = max_tokens
+            data = provider.chat_completion(**kwargs)
 
             content = data["choices"][0]["message"]["content"]
             usage = data.get("usage", {})

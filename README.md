@@ -13,8 +13,6 @@
 
 <p align="center">Production-grade LLM routing with budget ceilings, tiered escalation, and multi-provider failover.</p>
 
-<p align="center"><a href="https://itsarbit.substack.com/p/llm-routers-are-not-enough">Read the blog post: <em>LLM Routers Are Not Enough</em></a></p>
-
 ---
 
 TokenWise is not just a model picker.
@@ -94,7 +92,7 @@ plan = planner.plan("Build a REST API for a todo app", budget=0.50)
 
 ### Cost Ledger
 
-Every LLM call — successful or failed — is recorded in a structured `CostLedger`. See exactly where your money went across attempts and escalations.
+All LLM calls are recorded in a structured `CostLedger`, including failed attempts and escalations. See exactly where your money went.
 
 ### Multi-Provider Failover
 
@@ -178,6 +176,8 @@ response = client.chat.completions.create(
     messages=[{"role": "user", "content": "Hello!"}],
 )
 ```
+
+> **Background reading:** [LLM Routers Are Not Enough](https://itsarbit.substack.com/p/llm-routers-are-not-enough) — the blog post that motivated TokenWise's design.
 
 ---
 
