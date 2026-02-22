@@ -440,7 +440,7 @@ def plot_pareto(strategies: dict[str, StrategyResult], output_path: str) -> None
         )
 
     ax.set_xscale("log")
-    ax.set_xlabel("Avg Cost / Task (USD, log scale)", fontsize=9)
+    ax.set_xlabel("\u2190 Cheaper                    Avg Cost / Task (USD, log scale)                    More Expensive \u2192", fontsize=8)
     ax.set_ylabel("Success Rate (%)", fontsize=9)
     ax.set_title(
         "Cost\u2013Quality Frontier: Routing Strategies",
