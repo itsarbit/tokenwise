@@ -16,11 +16,6 @@ Production-grade LLM routing with budget ceilings,
 tiered escalation, and multi-provider failover.
 </p>
 
-TokenWise is a lightweight control layer for LLM systems that
-need hard budget ceilings, capability-aware routing, deterministic
-escalation, task decomposition, multi-provider failover, and an
-OpenAI-compatible proxy.
-
 ## 30-Second Demo
 
 ```bash
@@ -34,13 +29,21 @@ tokenwise plan "Write a Python function to validate email addresses, \
   then write unit tests for it" --budget 0.05 --execute
 ```
 
-## Quick Start
+Example output:
 
-### Install
+```
+Plan: 4 steps | Budget: $0.05 | Estimated: $0.0002
+
+Status: Success | Total cost: $0.0007 | Budget remaining: $0.0493
+```
+
+## Install
 
 ```bash
 pip install tokenwise-llm
 ```
+
+## Quick Start
 
 ### Set your API key
 
@@ -100,11 +103,11 @@ response = client.chat.completions.create(
 
 ## Core Features
 
-**Budget-aware routing** — hard USD ceiling per request or
-workflow. If nothing fits, TokenWise raises an error. The
-executor caps `max_tokens` per call with a 1.2x safety margin.
-Configure `TOKENWISE_MIN_OUTPUT_TOKENS` (default 100) for
-workflows that need tiny outputs under tight budgets.
+**Budget-aware routing** — strict cost ceilings with
+conservative estimation and enforced `max_tokens` caps (1.2x
+safety margin). Configure `TOKENWISE_MIN_OUTPUT_TOKENS`
+(default 100) for workflows that need tiny outputs under tight
+budgets.
 
 **Tiered escalation** — three tiers (budget, mid, flagship). On
 failure, escalates strictly upward, never downward. A failed code
@@ -124,6 +127,35 @@ attempts and escalations. Persisted to JSONL across sessions.
 **Multi-provider failover** — OpenRouter, OpenAI, Anthropic, and
 Google. Direct API keys bypass OpenRouter automatically. The
 proxy shares a single `httpx.AsyncClient` for connection pooling.
+
+## Benchmarks
+
+![Cost–Quality Frontier](assets/pareto.png)
+
+TokenWise escalation achieves flagship-level reliability at
+~9x lower cost than running flagship models exclusively.
+
+`benchmarks/strategy_pareto.py` runs 20 tasks (simple,
+reasoning, coding, hard) across four strategies and validates
+answer correctness. Single command to reproduce:
+
+```bash
+uv sync --group benchmark && uv run python benchmarks/strategy_pareto.py
+```
+
+Results (February 2026, 20 tasks per strategy):
+
+| Strategy | Success | Avg Cost / Task |
+|---|---|---|
+| Budget Only (gpt-4.1-nano) | 90% | $0.000183 |
+| Mid Only (gpt-4.1) | 90% | $0.003573 |
+| Flagship Only (claude-sonnet-4) | 100% | $0.009354 |
+| **TokenWise Escalation** | **100%** | **$0.001009** |
+
+Budget-only is cheapest but gets reasoning tasks wrong.
+Flagship is strongest but 51x more expensive. Escalation
+starts cheap, detects failures, and upgrades — achieving
+100% success at a fraction of the flagship cost.
 
 ## How It Works
 
@@ -235,7 +267,9 @@ Total: $0.0052, wasted: $0.0000, remaining: $0.9948
 
 ## Comparison
 
-High-level feature comparison with other tools:
+High-level comparison of major LLM routing tools (as of
+February 2026). Corrections welcome via
+[issues](https://github.com/itsarbit/tokenwise/issues).
 
 | Feature | TokenWise | [RouteLLM](https://github.com/lm-sys/RouteLLM) | [LiteLLM](https://github.com/BerriAI/litellm) | [Not Diamond](https://notdiamond.ai) | [Martian](https://withmartian.com) | [Portkey](https://portkey.ai) | [OpenRouter](https://openrouter.ai) |
 |---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
@@ -247,47 +281,6 @@ High-level feature comparison with other tools:
 | OpenAI-compatible proxy | **Yes** | Yes | Yes | Yes | Yes | Yes | Yes |
 | CLI | **Yes** | - | Yes | - | - | - | - |
 | Self-hosted / open source | **Yes** | Yes | Yes | - | - | Gateway only | - |
-
-The table reflects our understanding as of February 2026;
-corrections welcome via
-[issues](https://github.com/itsarbit/tokenwise/issues).
-
-## Benchmarks
-
-`benchmarks/pareto.py` runs 5 tasks across models at different
-price tiers and reports cost vs success rate. Single command to
-reproduce (outputs `benchmarks/results.csv` and
-`benchmarks/pareto.png`):
-
-```bash
-uv sync --group benchmark && uv run python benchmarks/pareto.py \
-  --models openai/gpt-4.1-nano deepseek/deepseek-chat \
-    openai/gpt-4.1-mini google/gemini-2.5-flash \
-    openai/gpt-4.1 anthropic/claude-sonnet-4 \
-    google/gemini-2.5-pro anthropic/claude-opus-4.6 \
-    openai/o4-mini google/gemini-3.1-pro-preview \
-  --csv benchmarks/results.csv --output benchmarks/pareto.png
-```
-
-Sample results (February 2026, 5 simple tasks per model):
-
-| Model | Tier | Success | Avg Cost / Task |
-|---|---|---|---|
-| openai/gpt-4.1-nano | budget | 100% | $0.000059 |
-| deepseek/deepseek-chat | budget | 100% | $0.000174 |
-| openai/gpt-4.1-mini | budget | 100% | $0.000238 |
-| google/gemini-2.5-flash | budget | 100% | $0.000498 |
-| openai/o4-mini | mid | 100% | $0.001137 |
-| openai/gpt-4.1 | mid | 100% | $0.001201 |
-| anthropic/claude-sonnet-4 | mid | 100% | $0.002681 |
-| google/gemini-2.5-pro | mid | 100% | $0.002913 |
-| google/gemini-3.1-pro-preview | flagship | 100% | $0.003490 |
-| anthropic/claude-opus-4.6 | flagship | 100% | $0.005029 |
-
-All models pass simple tasks — the value shows in cost: ~85x
-spread between cheapest and most expensive. Harder tasks
-(multi-step reasoning, long-context coding) will show quality
-differentiation where escalation shifts the frontier rightward.
 
 ## Known Limitations (v0.4)
 
@@ -336,7 +329,16 @@ default_budget: 0.50
 planner_model: openai/gpt-4.1-mini
 ```
 
-## Architecture
+## Development
+
+```bash
+git clone https://github.com/itsarbit/tokenwise.git
+cd tokenwise
+uv sync
+uv run pytest
+uv run ruff check src/ tests/
+uv run mypy src/
+```
 
 ```
 src/tokenwise/
@@ -357,17 +359,6 @@ src/tokenwise/
 │   └── resolver.py  # Maps model IDs → provider instances
 └── data/
     └── model_capabilities.json
-```
-
-## Development
-
-```bash
-git clone https://github.com/itsarbit/tokenwise.git
-cd tokenwise
-uv sync
-uv run pytest
-uv run ruff check src/ tests/
-uv run mypy src/
 ```
 
 ## Philosophy
