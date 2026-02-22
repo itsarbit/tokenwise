@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "tokenwise-llm"
-version = "0.4.2"
+version = "0.4.3"
 description = "Intelligent LLM task planner — decompose tasks, route to optimal models, enforce budgets"
 readme = "README.md"
 license = "MIT"
@@ -47,6 +47,7 @@ dev = [
     "ruff",
     "respx",
 ]
+benchmark = ["matplotlib"]
 
 [project.scripts]
 tokenwise = "tokenwise.cli:app"

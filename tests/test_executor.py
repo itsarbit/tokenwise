@@ -330,7 +330,7 @@ class TestExecutorAsync:
         ]
         plan = _make_plan(steps)
 
-        async def mock_aexecute(step_id, model_id, prompt, budget_remaining):
+        async def mock_aexecute(step_id, model_id, prompt, budget_remaining, **kw):
             return _mock_step_result(step_id, output=f"output-{step_id}")
 
         with patch.object(executor, "_aexecute_step", side_effect=mock_aexecute):
@@ -365,7 +365,7 @@ class TestExecutorAsync:
 
         call_order: list[int] = []
 
-        async def mock_aexecute(step_id, model_id, prompt, budget_remaining):
+        async def mock_aexecute(step_id, model_id, prompt, budget_remaining, **kw):
             call_order.append(step_id)
             return _mock_step_result(step_id, output=f"output-{step_id}")
 
@@ -397,7 +397,7 @@ class TestExecutorAsync:
         ]
         plan = _make_plan(steps, budget=0.001)
 
-        async def mock_aexecute(step_id, model_id, prompt, budget_remaining):
+        async def mock_aexecute(step_id, model_id, prompt, budget_remaining, **kw):
             return _mock_step_result(step_id, cost=0.002)
 
         with patch.object(executor, "_aexecute_step", side_effect=mock_aexecute):
@@ -430,7 +430,7 @@ class TestExecutorAsync:
         ]
         plan = _make_plan(steps, budget=0.002)
 
-        async def mock_aexecute(step_id, model_id, prompt, budget_remaining):
+        async def mock_aexecute(step_id, model_id, prompt, budget_remaining, **kw):
             return _mock_step_result(step_id, cost=0.002)
 
         with patch.object(executor, "_aexecute_step", side_effect=mock_aexecute):
@@ -550,7 +550,7 @@ class TestExecutorAsync:
         ]
         plan = _make_plan(steps, budget=0.01)
 
-        async def mock_aexecute(step_id, model_id, prompt, budget_remaining):
+        async def mock_aexecute(step_id, model_id, prompt, budget_remaining, **kw):
             return _mock_step_result(step_id, cost=0.006)
 
         with patch.object(executor, "_aexecute_step", side_effect=mock_aexecute):
@@ -603,7 +603,7 @@ class TestExecutorAsync:
 
         budgets_received: list[float] = []
 
-        async def mock_aexecute(step_id, model_id, prompt, budget_remaining):
+        async def mock_aexecute(step_id, model_id, prompt, budget_remaining, **kw):
             budgets_received.append(budget_remaining)
             return _mock_step_result(step_id, cost=0.01)
 
@@ -645,10 +645,31 @@ class TestMaxTokensGuardrail:
 
     def test_compute_max_tokens(self, sample_registry: ModelRegistry):
         executor = Executor(registry=sample_registry)
-        # gpt-4.1-mini output_price = 1.60 per million tokens
-        # budget = $0.016 → 0.016 / (1.60 / 1_000_000) = 10_000 tokens
+        # gpt-4.1-mini output_price = 1.60/M, input_price = 0.40/M
+        # budget = $0.016, no input tokens → 0.016 / (1.60 / 1M) = 10_000
         max_tok = executor._compute_max_tokens("openai/gpt-4.1-mini", 0.016)
         assert max_tok == 10_000
+
+    def test_compute_max_tokens_with_input_cost(self, sample_registry: ModelRegistry):
+        executor = Executor(registry=sample_registry)
+        # gpt-4.1-mini: input=$0.40/M, output=$1.60/M
+        # budget=$0.016, 1000 input tokens → input_cost = 0.40 * 1000 / 1M = $0.0004
+        # budget_for_output = 0.016 - 0.0004 = 0.0156
+        # max_tokens = 0.0156 / (1.60 / 1M) = 9750
+        max_tok = executor._compute_max_tokens(
+            "openai/gpt-4.1-mini", 0.016, estimated_input_tokens=1000
+        )
+        assert max_tok == 9750
+
+    def test_compute_max_tokens_input_exceeds_budget(self, sample_registry: ModelRegistry):
+        executor = Executor(registry=sample_registry)
+        # gpt-4.1-mini input=$0.40/M
+        # 50_000 input tokens → input_cost = 0.40 * 50000 / 1M = $0.02
+        # budget = $0.016 → budget_for_output = 0.016 - 0.02 = -0.004 → 0
+        max_tok = executor._compute_max_tokens(
+            "openai/gpt-4.1-mini", 0.016, estimated_input_tokens=50_000
+        )
+        assert max_tok == 0
 
     def test_compute_max_tokens_unknown_model(self, sample_registry: ModelRegistry):
         executor = Executor(registry=sample_registry)
@@ -665,6 +686,22 @@ class TestMaxTokensGuardrail:
             model_id="openai/gpt-4.1-mini",
             prompt="test",
             budget_remaining=tiny_budget,
+        )
+        assert not result.success
+        assert "Budget too low" in result.error
+
+    def test_execute_step_skips_when_input_cost_exceeds_budget(
+        self, sample_registry: ModelRegistry
+    ):
+        """High input token estimate can push output budget below minimum."""
+        executor = Executor(registry=sample_registry)
+        # Budget = $0.016, but 50k input tokens cost $0.02 → budget_for_output < 0 → 0
+        result = executor._execute_step(
+            step_id=1,
+            model_id="openai/gpt-4.1-mini",
+            prompt="test",
+            budget_remaining=0.016,
+            estimated_input_tokens=50_000,
         )
         assert not result.success
         assert "Budget too low" in result.error
@@ -688,10 +725,13 @@ class TestMaxTokensGuardrail:
                 model_id="openai/gpt-4.1-mini",
                 prompt="test",
                 budget_remaining=0.016,
+                estimated_input_tokens=1000,
             )
         call_kwargs = mock_provider.chat_completion.call_args[1]
         assert "max_tokens" in call_kwargs
-        assert call_kwargs["max_tokens"] == 10_000
+        # budget=$0.016, input_cost=0.40*1000/1M=$0.0004
+        # budget_for_output=$0.0156 → 0.0156/(1.60/1M) = 9750
+        assert call_kwargs["max_tokens"] == 9750
 
     async def test_aexecute_step_skips_when_budget_too_low(self, sample_registry: ModelRegistry):
         """Async step should fail gracefully when budget is too low."""
@@ -723,7 +763,9 @@ class TestMaxTokensGuardrail:
                 model_id="openai/gpt-4.1-mini",
                 prompt="test",
                 budget_remaining=0.016,
+                estimated_input_tokens=1000,
             )
         call_kwargs = mock_provider.achat_completion.call_args[1]
         assert "max_tokens" in call_kwargs
-        assert call_kwargs["max_tokens"] == 10_000
+        # Same math: budget_for_output=$0.0156 → 9750
+        assert call_kwargs["max_tokens"] == 9750

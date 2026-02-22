@@ -2,6 +2,16 @@
 
 All notable changes to TokenWise will be documented in this file.
 
+## [0.4.3] - 2026-02-21
+
+### Fixed
+- **Total-cost-aware budget enforcement** — `_compute_max_tokens` now subtracts estimated input token cost before computing the output cap, ensuring total cost (input + output) stays within the budget ceiling; previously only output price was considered, allowing input cost to push total spend over budget
+
+### Added
+- **Pareto benchmark script** — `benchmarks/pareto.py` runs tasks across model tiers and generates a cost-vs-quality scatter plot; supports `--dry-run` and `--models` flags
+- **Example section** — new README section with copy-paste CLI commands and example output
+- **`benchmark` dependency group** — `matplotlib` available via `uv sync --group benchmark`
+
 ## [0.4.2] - 2026-02-21
 
 ### Fixed

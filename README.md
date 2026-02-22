@@ -179,6 +179,37 @@ response = client.chat.completions.create(
 
 > **Background reading:** [LLM Routers Are Not Enough](https://itsarbit.substack.com/p/llm-routers-are-not-enough) — the blog post that motivated TokenWise's design.
 
+## Example
+
+Plan a task, execute it, and inspect the cost ledger — all in three commands:
+
+```bash
+# 1. Plan and execute a task ($0.05 budget)
+tokenwise plan "Write a Python function to validate email addresses, \
+  then write unit tests for it" --budget 0.05 --execute
+
+# 2. View your spend history
+tokenwise ledger --summary
+```
+
+Example output:
+
+```
+Plan for: Write a Python function to validate email addresses...
+Budget: $0.05
+Estimated cost: $0.0023
+
+┌─────────────────────────────────────────────────────────────┐
+│ #  Description              Model               Est. Cost   │
+│ 1  Write validation func    openai/gpt-4.1-mini  $0.0009    │
+│ 2  Write unit tests         openai/gpt-4.1-mini  $0.0014    │
+└─────────────────────────────────────────────────────────────┘
+
+Status: Success
+Total cost: $0.0019
+Budget remaining: $0.0481
+```
+
 ---
 
 ## How It Works

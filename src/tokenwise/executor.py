@@ -106,6 +106,7 @@ class Executor:
                     model_id=step.model_id,
                     prompt=prompt,
                     budget_remaining=remaining,
+                    estimated_input_tokens=step.estimated_input_tokens,
                 )
                 if not step_result.success and self._is_model_error(step_result):
                     self._failed_models.add(step.model_id)
@@ -263,6 +264,7 @@ class Executor:
                 model_id=step.model_id,
                 prompt=prompt,
                 budget_remaining=budget_remaining,
+                estimated_input_tokens=step.estimated_input_tokens,
             )
             if not step_result.success and self._is_model_error(step_result):
                 self._failed_models.add(step.model_id)
@@ -294,9 +296,10 @@ class Executor:
         model_id: str,
         prompt: str,
         budget_remaining: float,
+        estimated_input_tokens: int = 0,
     ) -> StepResult:
         """Execute a single step via async provider call."""
-        max_tokens = self._compute_max_tokens(model_id, budget_remaining)
+        max_tokens = self._compute_max_tokens(model_id, budget_remaining, estimated_input_tokens)
         if max_tokens is not None and max_tokens < _MIN_OUTPUT_TOKENS:
             return StepResult(
                 step_id=step_id,
@@ -371,7 +374,13 @@ class Executor:
 
         for attempt_num, model in enumerate(candidates[:5], start=1):
             tried.add(model.id)
-            result = await self._aexecute_step(step.id, model.id, prompt, budget_remaining)
+            result = await self._aexecute_step(
+                step.id,
+                model.id,
+                prompt,
+                budget_remaining,
+                estimated_input_tokens=step.estimated_input_tokens,
+            )
             result.escalated = True
 
             ledger.record(
@@ -393,15 +402,27 @@ class Executor:
 
         return None
 
-    def _compute_max_tokens(self, model_id: str, budget_remaining: float) -> int | None:
+    def _compute_max_tokens(
+        self,
+        model_id: str,
+        budget_remaining: float,
+        estimated_input_tokens: int = 0,
+    ) -> int | None:
         """Compute max output tokens that fit within the remaining budget.
+
+        Reserves budget for estimated input cost before computing the output cap,
+        ensuring total cost (input + output) stays within budget.
 
         Returns None if the model is unknown or has no output pricing.
         """
         model = self.registry.get_model(model_id)
         if not model or model.output_price <= 0:
             return None
-        return int(budget_remaining / (model.output_price / 1_000_000))
+        input_cost = model.input_price * estimated_input_tokens / 1_000_000
+        budget_for_output = budget_remaining - input_cost
+        if budget_for_output <= 0:
+            return 0
+        return int(budget_for_output / (model.output_price / 1_000_000))
 
     def _build_prompt(self, description: str, template: str, prior_outputs: dict[int, str]) -> str:
         """Build the prompt for a step, including prior context."""
@@ -425,9 +446,10 @@ class Executor:
         model_id: str,
         prompt: str,
         budget_remaining: float,
+        estimated_input_tokens: int = 0,
     ) -> StepResult:
         """Execute a single step by calling the LLM."""
-        max_tokens = self._compute_max_tokens(model_id, budget_remaining)
+        max_tokens = self._compute_max_tokens(model_id, budget_remaining, estimated_input_tokens)
         if max_tokens is not None and max_tokens < _MIN_OUTPUT_TOKENS:
             return StepResult(
                 step_id=step_id,
@@ -592,7 +614,13 @@ class Executor:
         # Try up to 5 alternative models
         for attempt_num, model in enumerate(candidates[:5], start=1):
             tried.add(model.id)
-            result = self._execute_step(step.id, model.id, prompt, budget_remaining)
+            result = self._execute_step(
+                step.id,
+                model.id,
+                prompt,
+                budget_remaining,
+                estimated_input_tokens=step.estimated_input_tokens,
+            )
             result.escalated = True
 
             ledger.record(
