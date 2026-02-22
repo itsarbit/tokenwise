@@ -52,7 +52,15 @@ TokenWise treats routing as infrastructure — not a convenience feature.
 | Python API | **Yes** | Yes | Yes | Yes | Via OpenAI SDK | Yes | Yes |
 | Self-hosted / open source | **Yes** | Yes | Yes | - | - | Gateway only | - |
 
-**Key differentiator:** TokenWise is the only router that also **plans** — it decomposes a complex task into subtasks, assigns the optimal model to each step within your budget, tracks spend across attempts with a structured cost ledger, and escalates to stronger models on failure. Every other tool on this list only routes individual queries.
+**What these terms mean in TokenWise's context:**
+
+- **Task decomposition** — breaks a complex prompt into multiple LLM steps, each assigned to a different model. Not just model selection per request.
+- **Strict budget ceiling** — hard cap on total USD spend; execution stops rather than overshooting. Some tools offer per-request limits but not cross-step budgets.
+- **Tier-based escalation** — on failure, retries with a stronger-tier model (budget → mid → flagship), never downward.
+- **Capability-aware fallback** — fallback candidates are filtered by required capabilities (code, reasoning, math), not just price or tier.
+- **Cost ledger** — structured per-call log of model, tokens, cost, and success/failure — including failed attempts and escalations.
+
+Note: some competitors may partially cover these features. The table reflects our understanding as of February 2026; corrections welcome via [issues](https://github.com/itsarbit/tokenwise/issues).
 
 ---
 
@@ -264,6 +272,38 @@ Budget remaining: $0.0481
 
 **Executor** runs a plan step by step, tracks actual token usage and cost via a `CostLedger`, and escalates to a stronger model if a step fails. Escalation tries stronger tiers first (flagship before mid) and filters by the step's required capabilities.
 
+### Observability
+
+Every execution produces a structured trace. Inspect which model was used, whether escalation occurred, and where each dollar went:
+
+```python
+result = executor.execute(plan)
+
+# Per-step: which model ran, whether it was escalated
+for sr in result.step_results:
+    print(f"Step {sr.step_id}: model={sr.model_id}, cost=${sr.actual_cost:.4f}, "
+          f"escalated={sr.escalated}, success={sr.success}")
+
+# Cost ledger: every LLM call including failed attempts
+for entry in result.ledger.entries:
+    print(f"  {entry.reason}: {entry.model_id} "
+          f"({entry.input_tokens}in/{entry.output_tokens}out) "
+          f"${entry.cost:.6f} {'ok' if entry.success else 'FAIL'}")
+
+# Aggregate
+print(f"Total: ${result.total_cost:.4f}, "
+      f"wasted: ${result.ledger.wasted_cost:.4f}, "
+      f"remaining: ${result.budget_remaining:.4f}")
+```
+
+Example output when step 1 fails and escalates:
+```
+Step 1: model=openai/gpt-4.1, cost=$0.0052, escalated=True, success=True
+  step 1 attempt 1: openai/gpt-4.1-mini (82in/0out) $0.0000 FAIL
+  step 1 escalation attempt 1: openai/gpt-4.1 (82in/204out) $0.0018 ok
+Total: $0.0052, wasted: $0.0000, remaining: $0.9948
+```
+
 ## Routing Strategies
 
 | Strategy | When to Use | How It Works |
@@ -330,6 +370,30 @@ LLM systems should be treated like distributed systems.
 
 That means clear failure semantics, explicit cost ceilings, predictable escalation, and observability. TokenWise is designed with that philosophy.
 
+## Benchmarks
+
+`benchmarks/pareto.py` runs 5 tasks across models at different price tiers and reports cost vs success rate. Reproduce it:
+
+```bash
+uv sync --group benchmark  # installs matplotlib
+uv run python benchmarks/pareto.py --models \
+  openai/gpt-4.1-nano deepseek/deepseek-chat openai/gpt-4.1-mini \
+  google/gemini-2.5-flash openai/gpt-4.1 anthropic/claude-sonnet-4
+```
+
+Sample results (February 2026):
+
+| Model | Success Rate | Avg Cost / Task |
+|---|---|---|
+| openai/gpt-4.1-nano | 100% | $0.000068 |
+| deepseek/deepseek-chat | 100% | $0.000187 |
+| openai/gpt-4.1-mini | 100% | $0.000234 |
+| google/gemini-2.5-flash | 100% | $0.000500 |
+| openai/gpt-4.1 | 100% | $0.001262 |
+| anthropic/claude-sonnet-4 | 100% | $0.002762 |
+
+All models pass simple tasks, so the value shows in cost: 40x spread between the cheapest and most expensive. Harder tasks (multi-step reasoning, long-context coding) will show quality differentiation — add flagship models like `openai/o3` or `anthropic/claude-opus-4` with `--models` to see the full Pareto front. Use `--csv` to save raw results.
+
 ## Known Limitations (v0.4)
 
 All three v0.3 limitations have been resolved:
@@ -337,6 +401,8 @@ All three v0.3 limitations have been resolved:
 - ~~Planner cost not budgeted~~ — planner LLM cost is now tracked and deducted from budget (v0.4)
 - ~~Linear execution~~ — independent steps now run in parallel via async DAG scheduling (v0.4)
 - ~~No persistent spend tracking~~ — execution history is persisted to JSONL; see `tokenwise ledger` (v0.4)
+
+**Note on `execute()` inside async contexts:** If you call `executor.execute(plan)` from inside an existing event loop (Jupyter, FastAPI, etc.), it automatically falls back to sequential step execution. For concurrent DAG scheduling in async code, use `await executor.aexecute(plan)` directly.
 
 ## Development
 

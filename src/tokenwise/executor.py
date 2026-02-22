@@ -20,6 +20,9 @@ _MODEL_UNUSABLE_CODES = {402, 403, 404}
 # Minimum output tokens below which we skip the step rather than producing truncated junk
 _MIN_OUTPUT_TOKENS = 100
 
+# Safety margin multiplier on input token estimates to account for tokenizer variance
+_INPUT_TOKEN_SAFETY_MARGIN = 1.2
+
 _TIER_STRENGTH: dict[ModelTier, int] = {
     ModelTier.BUDGET: 0,
     ModelTier.MID: 1,
@@ -42,7 +45,14 @@ class Executor:
     def execute(self, plan: Plan) -> PlanResult:
         """Execute all steps in a plan, using async DAG scheduling when possible.
 
-        Steps with satisfied dependencies run concurrently.
+        Steps with satisfied dependencies run concurrently via ``aexecute()``.
+
+        **Note:** If called inside an existing async event loop (e.g. from a
+        Jupyter notebook, FastAPI endpoint, or nested ``asyncio.run``), this
+        method automatically falls back to sequential execution to avoid nested
+        loop errors. In that case, use ``await aexecute(plan)`` directly for
+        concurrent step execution.
+
         Tracks actual cost and stops if budget is exceeded.
         On step failure, attempts escalation to a stronger model.
 
@@ -51,8 +61,10 @@ class Executor:
         """
         try:
             asyncio.get_running_loop()
-            # Already in an async context — fall back to sequential to avoid
-            # nested event loop issues
+            logger.info(
+                "Existing event loop detected — falling back to sequential execution. "
+                "Use await aexecute(plan) for concurrent step execution.",
+            )
             return self._execute_sequential(plan)
         except RuntimeError:
             pass
@@ -300,7 +312,8 @@ class Executor:
     ) -> StepResult:
         """Execute a single step via async provider call."""
         prompt_based_estimate = len(prompt) // 4
-        input_tokens = max(estimated_input_tokens, prompt_based_estimate)
+        raw_estimate = max(estimated_input_tokens, prompt_based_estimate)
+        input_tokens = int(raw_estimate * _INPUT_TOKEN_SAFETY_MARGIN)
         max_tokens = self._compute_max_tokens(model_id, budget_remaining, input_tokens)
         if max_tokens is not None and max_tokens < _MIN_OUTPUT_TOKENS:
             return StepResult(
@@ -452,7 +465,8 @@ class Executor:
     ) -> StepResult:
         """Execute a single step by calling the LLM."""
         prompt_based_estimate = len(prompt) // 4
-        input_tokens = max(estimated_input_tokens, prompt_based_estimate)
+        raw_estimate = max(estimated_input_tokens, prompt_based_estimate)
+        input_tokens = int(raw_estimate * _INPUT_TOKEN_SAFETY_MARGIN)
         max_tokens = self._compute_max_tokens(model_id, budget_remaining, input_tokens)
         if max_tokens is not None and max_tokens < _MIN_OUTPUT_TOKENS:
             return StepResult(

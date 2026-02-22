@@ -732,11 +732,11 @@ class TestMaxTokensGuardrail:
                 estimated_input_tokens=100,
             )
         call_kwargs = mock_provider.chat_completion.call_args[1]
-        # max(100, 4000//4) = 1000 tokens used for input cost
-        # input_cost = 0.40 * 1000 / 1M = $0.0004
-        # budget_for_output = 0.016 - 0.0004 = 0.0156
-        # max_tokens = 0.0156 / (1.60 / 1M) = 9750
-        assert call_kwargs["max_tokens"] == 9750
+        # max(100, 4000//4) = 1000, * 1.2 safety margin = 1200 tokens
+        # input_cost = 0.40 * 1200 / 1M = $0.00048
+        # budget_for_output = 0.016 - 0.00048 = 0.01552
+        # max_tokens = 0.01552 / (1.60 / 1M) = 9700
+        assert call_kwargs["max_tokens"] == 9700
 
     def test_execute_step_passes_max_tokens(self, sample_registry: ModelRegistry):
         """_execute_step should pass max_tokens to provider when budget is set."""
@@ -761,9 +761,10 @@ class TestMaxTokensGuardrail:
             )
         call_kwargs = mock_provider.chat_completion.call_args[1]
         assert "max_tokens" in call_kwargs
-        # budget=$0.016, input_cost=0.40*1000/1M=$0.0004
-        # budget_for_output=$0.0156 → 0.0156/(1.60/1M) = 9750
-        assert call_kwargs["max_tokens"] == 9750
+        # max(1000, len("test")//4=1) * 1.2 = 1200 input tokens
+        # input_cost=0.40*1200/1M=$0.00048
+        # budget_for_output=$0.01552 → 0.01552/(1.60/1M) = 9700
+        assert call_kwargs["max_tokens"] == 9700
 
     async def test_aexecute_step_skips_when_budget_too_low(self, sample_registry: ModelRegistry):
         """Async step should fail gracefully when budget is too low."""
@@ -799,5 +800,112 @@ class TestMaxTokensGuardrail:
             )
         call_kwargs = mock_provider.achat_completion.call_args[1]
         assert "max_tokens" in call_kwargs
-        # Same math: budget_for_output=$0.0156 → 9750
-        assert call_kwargs["max_tokens"] == 9750
+        # Same math: 1200 input tokens with 1.2x margin → 9700
+        assert call_kwargs["max_tokens"] == 9700
+
+
+class TestProductionInvariants:
+    """Tests for invariants that must hold in production."""
+
+    async def test_parallel_reservation_total_cost_within_budget(
+        self, sample_registry: ModelRegistry
+    ):
+        """Total cost of parallel steps must not exceed budget by more than one step."""
+        executor = Executor(registry=sample_registry)
+        # Three independent steps, each estimated at 0.004, budget = 0.01
+        # Reservation should prevent all three from launching simultaneously
+        steps = [
+            Step(
+                id=i,
+                description=f"Step {i}",
+                model_id="openai/gpt-4.1-mini",
+                estimated_cost=0.004,
+                depends_on=[],
+            )
+            for i in range(1, 4)
+        ]
+        plan = _make_plan(steps, budget=0.01)
+
+        async def mock_aexecute(step_id, model_id, prompt, budget_remaining, **kw):
+            return _mock_step_result(step_id, cost=0.004)
+
+        with patch.object(executor, "_aexecute_step", side_effect=mock_aexecute):
+            result = await executor.aexecute(plan)
+
+        # Budget is 0.01; at most two steps can run (0.004 + 0.004 = 0.008)
+        # Third step's reservation (0.008 + 0.004 = 0.012) exceeds budget
+        assert result.total_cost <= plan.budget + 0.001
+
+    async def test_total_cost_equals_sum_of_step_results(self, sample_registry: ModelRegistry):
+        """total_cost must equal the sum of all step_results' actual_cost."""
+        executor = Executor(registry=sample_registry)
+        steps = [
+            Step(
+                id=1,
+                description="Step 1",
+                model_id="openai/gpt-4.1-mini",
+                estimated_cost=0.003,
+                depends_on=[],
+            ),
+            Step(
+                id=2,
+                description="Step 2",
+                model_id="openai/gpt-4.1-mini",
+                estimated_cost=0.003,
+                depends_on=[1],
+            ),
+        ]
+        plan = _make_plan(steps, budget=1.0)
+
+        call_count = 0
+
+        async def mock_aexecute(step_id, model_id, prompt, budget_remaining, **kw):
+            nonlocal call_count
+            call_count += 1
+            # Vary costs to make the assertion meaningful
+            cost = 0.002 if step_id == 1 else 0.005
+            return _mock_step_result(step_id, cost=cost)
+
+        with patch.object(executor, "_aexecute_step", side_effect=mock_aexecute):
+            result = await executor.aexecute(plan)
+
+        step_cost_sum = sum(sr.actual_cost for sr in result.step_results)
+        assert result.total_cost == pytest.approx(step_cost_sum)
+        assert result.total_cost == pytest.approx(0.007)
+
+    async def test_ledger_entries_cover_all_attempts(self, sample_registry: ModelRegistry):
+        """Ledger must have an entry for every LLM call including failed attempts."""
+        executor = Executor(registry=sample_registry)
+        step = Step(
+            id=1,
+            description="Failing step",
+            model_id="openai/gpt-4.1-mini",
+            estimated_cost=0.01,
+            depends_on=[],
+        )
+        plan = _make_plan([step], budget=1.0)
+
+        failed = _mock_step_result(1, success=False, cost=0.002)
+        escalated = _mock_step_result(1, model_id="openai/gpt-4.1", output="ok", cost=0.005)
+        escalated.escalated = True
+
+        with patch.object(
+            executor,
+            "_aexecute_step",
+            new_callable=AsyncMock,
+            return_value=failed,
+        ):
+            with patch.object(
+                executor,
+                "_aescalate",
+                new_callable=AsyncMock,
+                return_value=escalated,
+            ):
+                result = await executor.aexecute(plan)
+
+        # Ledger should have at least the initial failed attempt
+        assert len(result.ledger.entries) >= 1
+        assert result.ledger.entries[0].success is False
+        assert result.ledger.entries[0].cost == pytest.approx(0.002)
+        # total_cost includes both failed + escalated costs
+        assert result.total_cost == pytest.approx(0.002 + 0.005)
