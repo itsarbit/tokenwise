@@ -146,21 +146,22 @@ response = client.chat.completions.create(
 
 *X-axis: average cost per task (USD). Y-axis: success rate (%).
 The star marks the TokenWise escalation strategy, which uses `Router.route()`
-with escalating strategies (cheapest → balanced → best_quality) and retries
-on validation failure. Baselines use a single fixed model for all tasks.*
+with escalating strategies (cheapest → balanced → best_quality) and
+escalates to higher tiers when a task fails validation (max 1 escalation
+per tier). Baselines use a single fixed model for all tasks.*
 
 On this 20-task benchmark set, TokenWise Escalation is the only
-strategy that reaches 100% success, at about 5x lower average cost
-per task than Flagship Only.
+strategy reaching 100% success, while reducing average cost per task
+by ~5x versus Flagship Only.
 
-| Strategy | Success | Avg Cost / Task | Models |
-|---|---|---|---|
-| Budget Only | 85% | $0.000177 | gpt-4.1-nano |
-| Mid Only | 90% | $0.003842 | gpt-4.1 |
-| Flagship Only | 95% | $0.009492 | claude-sonnet-4 |
-| **TokenWise Escalation** | **100%** | **$0.001985** | Router-selected |
+| Strategy | Success | Avg Cost / Task | Cost Std | Models |
+|---|---|---|---|---|
+| Budget Only | 85% | $0.000177 | $0.000120 | gpt-4.1-nano |
+| Mid Only | 90% | $0.003842 | $0.002430 | gpt-4.1 |
+| Flagship Only | 95% | $0.009492 | $0.005994 | claude-sonnet-4 |
+| **TokenWise Escalation** | **100%** | **$0.001985** | **$0.004062** | Router-selected |
 
-Single run with fixed seed. Results may vary across model versions and pricing updates.
+Results from a single fixed-seed run. Model pricing and outputs may vary over time.
 
 In multi-step workflows (10–50 steps), the per-step savings compound:
 a 5x reduction per step means 5x for the entire workflow.  With more
