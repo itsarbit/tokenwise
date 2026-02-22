@@ -299,7 +299,9 @@ class Executor:
         estimated_input_tokens: int = 0,
     ) -> StepResult:
         """Execute a single step via async provider call."""
-        max_tokens = self._compute_max_tokens(model_id, budget_remaining, estimated_input_tokens)
+        prompt_based_estimate = len(prompt) // 4
+        input_tokens = max(estimated_input_tokens, prompt_based_estimate)
+        max_tokens = self._compute_max_tokens(model_id, budget_remaining, input_tokens)
         if max_tokens is not None and max_tokens < _MIN_OUTPUT_TOKENS:
             return StepResult(
                 step_id=step_id,
@@ -449,7 +451,9 @@ class Executor:
         estimated_input_tokens: int = 0,
     ) -> StepResult:
         """Execute a single step by calling the LLM."""
-        max_tokens = self._compute_max_tokens(model_id, budget_remaining, estimated_input_tokens)
+        prompt_based_estimate = len(prompt) // 4
+        input_tokens = max(estimated_input_tokens, prompt_based_estimate)
+        max_tokens = self._compute_max_tokens(model_id, budget_remaining, input_tokens)
         if max_tokens is not None and max_tokens < _MIN_OUTPUT_TOKENS:
             return StepResult(
                 step_id=step_id,

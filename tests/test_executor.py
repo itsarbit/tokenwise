@@ -706,6 +706,38 @@ class TestMaxTokensGuardrail:
         assert not result.success
         assert "Budget too low" in result.error
 
+    def test_prompt_length_overrides_low_estimate(self, sample_registry: ModelRegistry):
+        """Actual prompt length should override a low estimated_input_tokens."""
+        from unittest.mock import MagicMock
+
+        executor = Executor(registry=sample_registry)
+        mock_provider = MagicMock()
+        mock_provider.chat_completion.return_value = {
+            "choices": [{"message": {"content": "ok"}}],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 10},
+        }
+
+        # Prompt is 4000 chars → len//4 = 1000 tokens, but estimate says 100
+        long_prompt = "x" * 4000
+        with patch.object(
+            executor._resolver,
+            "resolve",
+            return_value=(mock_provider, "gpt-4.1-mini"),
+        ):
+            executor._execute_step(
+                step_id=1,
+                model_id="openai/gpt-4.1-mini",
+                prompt=long_prompt,
+                budget_remaining=0.016,
+                estimated_input_tokens=100,
+            )
+        call_kwargs = mock_provider.chat_completion.call_args[1]
+        # max(100, 4000//4) = 1000 tokens used for input cost
+        # input_cost = 0.40 * 1000 / 1M = $0.0004
+        # budget_for_output = 0.016 - 0.0004 = 0.0156
+        # max_tokens = 0.0156 / (1.60 / 1M) = 9750
+        assert call_kwargs["max_tokens"] == 9750
+
     def test_execute_step_passes_max_tokens(self, sample_registry: ModelRegistry):
         """_execute_step should pass max_tokens to provider when budget is set."""
         from unittest.mock import MagicMock
