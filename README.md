@@ -16,232 +16,84 @@ Production-grade LLM routing with budget ceilings,
 tiered escalation, and multi-provider failover.
 </p>
 
----
+TokenWise is a lightweight control layer for LLM systems that
+need hard budget ceilings, capability-aware routing, deterministic
+escalation, task decomposition, multi-provider failover, and an
+OpenAI-compatible proxy.
 
-TokenWise is not just a model picker.
+## 30-Second Demo
 
-It is a lightweight control layer for LLM systems that need:
+```bash
+pip install tokenwise-llm
 
-- **Strict budget enforcement** — hard cost ceilings that fail
-  fast, never silently overspend*
-- **Capability-aware routing** — routes and fallbacks filtered
-  by what the task actually needs (code, reasoning, math)
-- **Deterministic escalation** — budget to mid to flagship,
-  never downward
-- **Task decomposition** — break complex work into subtasks,
-  each routed to the right model
-- **Multi-provider failover** — OpenRouter, OpenAI, Anthropic,
-  Google — with a shared connection pool
-- **An OpenAI-compatible proxy** — drop-in replacement for any
-  existing SDK
+# Set your OpenRouter API key (or OPENAI_API_KEY / ANTHROPIC_API_KEY / GOOGLE_API_KEY)
+export OPENROUTER_API_KEY="sk-or-..."
 
-Modern LLM applications are production systems.
-Production systems need guardrails.
-TokenWise provides those guardrails.
+# Route a query to the best model within budget
+tokenwise route "Debug this segfault" --strategy best_quality --budget 0.05
 
-## Why TokenWise Exists
-
-Most LLM routers do one thing: pick a model per request.
-That is not enough for real systems.
-
-In production, you need a hard budget ceiling per task.
-You need tiered escalation that tries stronger models when
-weaker ones fail. You need provider failover. You need
-capability-aware routing that knows a coding task should not
-fall back to a model that cannot code. You need deterministic
-behavior you can reason about.
-
-TokenWise treats routing as infrastructure — not a convenience
-feature.
-
-> **Note:** TokenWise uses [OpenRouter](https://openrouter.ai)
-> as the default model gateway for model discovery and routing.
-> You can also use direct provider APIs (OpenAI, Anthropic,
-> Google) by setting the corresponding API keys — when a direct
-> key is available, requests for that provider bypass OpenRouter
-> automatically.
-
-## Comparison
-
-| Feature | TokenWise | [RouteLLM](https://github.com/lm-sys/RouteLLM) | [LiteLLM](https://github.com/BerriAI/litellm) | [Not Diamond](https://notdiamond.ai) | [Martian](https://withmartian.com) | [Portkey](https://portkey.ai) | [OpenRouter](https://openrouter.ai) |
-|---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
-| Task decomposition | **Yes** | - | - | - | - | - | - |
-| Strict budget ceiling | **Yes** | - | Yes | - | Per-request | Yes | Yes |
-| Tier-based escalation | **Yes** | - | Yes | - | - | Yes | - |
-| Capability-aware fallback | **Yes** | - | - | Partial | Yes | Partial | Partial |
-| Cost ledger | **Yes** | - | Yes | - | - | Yes | Dashboard |
-| OpenAI-compatible proxy | **Yes** | Yes | Yes | Yes | Yes | Yes | Yes |
-| CLI | **Yes** | - | Yes | - | - | - | - |
-| Python API | **Yes** | Yes | Yes | Yes | Via OpenAI SDK | Yes | Yes |
-| Self-hosted / open source | **Yes** | Yes | Yes | - | - | Gateway only | - |
-
-**What these terms mean in TokenWise's context:**
-
-- **Task decomposition** — breaks a complex prompt into multiple
-  LLM steps, each assigned to a different model. Not just model
-  selection per request.
-- **Strict budget ceiling** — hard cap on total USD spend;
-  execution stops rather than overshooting. Some tools offer
-  per-request limits but not cross-step budgets.
-- **Tier-based escalation** — on failure, retries with a
-  stronger-tier model (budget, mid, flagship), never downward.
-- **Capability-aware fallback** — fallback candidates are
-  filtered by required capabilities (code, reasoning, math),
-  not just price or tier.
-- **Cost ledger** — structured per-call log of model, tokens,
-  cost, and success/failure — including failed attempts and
-  escalations.
-
-Note: some competitors may partially cover these features.
-The table reflects our understanding as of February 2026;
-corrections welcome via
-[issues](https://github.com/itsarbit/tokenwise/issues).
-
----
-
-## Core Features
-
-### Budget-Aware Routing
-
-Enforce a strict maximum cost per request or workflow. If no
-model fits within the ceiling, TokenWise fails fast. No silent
-overspending.*
-
-```python
-router = Router()
-model = router.route(
-    "Debug this segfault",
-    strategy="best_quality",
-    budget=0.05,
-)
-# Raises ValueError if nothing fits
+# Decompose a task, execute it, track spend
+tokenwise plan "Write a Python function to validate email addresses, \
+  then write unit tests for it" --budget 0.05 --execute
 ```
 
-The executor caps `max_tokens` per call using a 1.2x safety
-margin on input token estimates. Steps producing fewer than
-`min_output_tokens` (default 100) are skipped — configure via
-`TOKENWISE_MIN_OUTPUT_TOKENS` or `Executor(min_output_tokens=N)`
-for workflows that need tiny outputs under tight budgets.
+```
+Plan: 2 steps, estimated $0.0023
+  Step 1: Write validation func → openai/gpt-4.1-mini  $0.0009
+  Step 2: Write unit tests      → openai/gpt-4.1-mini  $0.0014
 
-### Tiered Escalation
-
-Three model tiers: **budget**, **mid**, **flagship**.
-
-If a model fails, TokenWise escalates strictly upward. It never
-downgrades. Escalation preserves required capabilities — a
-failed code model is replaced by a stronger code model, not a
-generic one.
-
-### Capability-Aware Selection
-
-Routing considers capabilities: `code`, `reasoning`, `math`,
-`general`.
-
-Fallback never selects a model that cannot perform the required
-task. Capabilities are tracked per step, not inferred at retry
-time.
-
-### Task Decomposition
-
-Break complex tasks into subtasks. Each step gets the right
-model at the right price.
-
-```python
-planner = Planner()
-plan = planner.plan(
-    "Build a REST API for a todo app",
-    budget=0.50,
-)
-# 4 steps, each with the cheapest viable model
+Status: Success | Cost: $0.0019 | Budget remaining: $0.0481
 ```
 
-### Cost Ledger
+## Quick Start
 
-All LLM calls are recorded in a structured `CostLedger`,
-including failed attempts and escalations. See exactly where
-your money went.
-
-### Multi-Provider Failover
-
-Supports OpenRouter, OpenAI, Anthropic, and Google. Direct API
-keys bypass OpenRouter automatically. The proxy shares a single
-`httpx.AsyncClient` across all providers for connection pooling.
-
----
-
-## Install
+### Install
 
 ```bash
 pip install tokenwise-llm
 ```
 
-## Quick Start
-
-### 1. Set your API key
+### Set your API key
 
 ```bash
 export OPENROUTER_API_KEY="sk-or-..."
 ```
 
-### 2. Use it
+> TokenWise uses [OpenRouter](https://openrouter.ai) as the
+> default gateway. Set `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, or
+> `GOOGLE_API_KEY` to bypass OpenRouter for those providers.
 
-**CLI:**
+### CLI
 
 ```bash
-# Route a query
 tokenwise route "Write a haiku about Python"
-
-# Route with budget ceiling
-tokenwise route "Debug this segfault" \
-  --strategy best_quality --budget 0.05
-
-# Plan and execute a complex task
-tokenwise plan "Build a REST API for a todo app" \
-  --budget 0.50 --execute
-
-# View spend history
-tokenwise ledger
+tokenwise route "Debug this segfault" --strategy best_quality --budget 0.05
+tokenwise plan "Build a REST API" --budget 0.50 --execute
 tokenwise ledger --summary
-
-# Start the OpenAI-compatible proxy
 tokenwise serve --port 8000
-
-# List models and pricing
 tokenwise models
 ```
 
-**Python API:**
+### Python API
 
 ```python
 from tokenwise import Router, Planner, Executor
 
 # Route a single query
 router = Router()
-model = router.route(
-    "Explain quantum computing",
-    strategy="balanced",
-    budget=0.10,
-)
-print(f"Use model: {model.id} "
-      f"(${model.input_price}/M input tokens)")
+model = router.route("Explain quantum computing", strategy="balanced", budget=0.10)
+print(f"{model.id} (${model.input_price}/M input)")
 
-# Plan a complex task
+# Plan and execute a complex task
 planner = Planner()
-plan = planner.plan(
-    task="Build a REST API for a todo app",
-    budget=0.50,
-)
-print(f"Plan: {len(plan.steps)} steps, "
-      f"estimated ${plan.total_estimated_cost:.4f}")
+plan = planner.plan(task="Build a REST API for a todo app", budget=0.50)
 
-# Execute the plan — tracks spend, escalates on failure
 executor = Executor()
 result = executor.execute(plan)
-print(f"Done! Cost: ${result.total_cost:.4f}, "
-      f"success: {result.success}")
+print(f"Cost: ${result.total_cost:.4f}, success: {result.success}")
 ```
 
-**OpenAI-compatible proxy:**
+### OpenAI-compatible proxy
 
 ```bash
 tokenwise serve --port 8000
@@ -250,56 +102,43 @@ tokenwise serve --port 8000
 ```python
 from openai import OpenAI
 
-client = OpenAI(
-    base_url="http://localhost:8000/v1",
-    api_key="unused",
-)
+client = OpenAI(base_url="http://localhost:8000/v1", api_key="unused")
 response = client.chat.completions.create(
     model="auto",  # TokenWise picks the best model
     messages=[{"role": "user", "content": "Hello!"}],
 )
 ```
 
-> **Background reading:**
-> [LLM Routers Are Not Enough](https://itsarbit.substack.com/p/llm-routers-are-not-enough)
-> — the blog post that motivated TokenWise's design.
+## Core Features
 
-## Example
+**Budget-aware routing** — hard USD ceiling per request or
+workflow. If nothing fits, TokenWise raises an error. The
+executor caps `max_tokens` per call with a 1.2x safety margin.
+Configure `TOKENWISE_MIN_OUTPUT_TOKENS` (default 100) for
+workflows that need tiny outputs under tight budgets.
 
-Plan a task, execute it, and inspect the cost ledger — all in
-three commands:
+**Tiered escalation** — three tiers (budget, mid, flagship). On
+failure, escalates strictly upward, never downward. A failed code
+model is replaced by a stronger code model, not a generic one.
 
-```bash
-# 1. Plan and execute a task ($0.05 budget)
-tokenwise plan "Write a Python function to validate \
-  email addresses, then write unit tests for it" \
-  --budget 0.05 --execute
+**Capability-aware selection** — routes and fallbacks filtered by
+`code`, `reasoning`, `math`, or `general`. Capabilities are
+tracked per step, not inferred at retry time.
 
-# 2. View your spend history
-tokenwise ledger --summary
-```
+**Task decomposition** — breaks complex tasks into subtasks via
+an LLM planner, assigns the cheapest capable model to each step,
+and runs independent steps concurrently via async DAG scheduling.
 
-Example output:
+**Cost ledger** — every LLM call is recorded, including failed
+attempts and escalations. Persisted to JSONL across sessions.
 
-```
-Plan for: Write a Python function to validate email addresses...
-Budget: $0.05
-Estimated cost: $0.0023
-
-┌─────────────────────────────────────────────────────────────┐
-│ #  Description              Model               Est. Cost   │
-│ 1  Write validation func    openai/gpt-4.1-mini  $0.0009    │
-│ 2  Write unit tests         openai/gpt-4.1-mini  $0.0014    │
-└─────────────────────────────────────────────────────────────┘
-
-Status: Success
-Total cost: $0.0019
-Budget remaining: $0.0481
-```
-
----
+**Multi-provider failover** — OpenRouter, OpenAI, Anthropic, and
+Google. Direct API keys bypass OpenRouter automatically. The
+proxy shares a single `httpx.AsyncClient` for connection pooling.
 
 ## How It Works
+
+### Architecture Overview
 
 ```
 ┌───────────────────────────────────────────────────────┐
@@ -330,7 +169,10 @@ Budget remaining: $0.0481
 └───────────────────────────────────────────────────────┘
 ```
 
-**Router** uses a two-stage pipeline for every request:
+### Router Pipeline
+
+The router uses a two-stage pipeline: detect what the query
+needs, then choose how to spend.
 
 ```
             ┌───────────────────┐    ┌──────────────────┐
@@ -345,47 +187,41 @@ Budget remaining: $0.0481
             └───────────────────┘    └──────────────────┘
 ```
 
-**Router** separates *understanding what the query needs* from
-*choosing how to spend*. Budget is a universal parameter — not
-a strategy. By default, the router enforces the budget as a
-hard ceiling: if no model fits, it raises an error instead of
-silently exceeding the limit.
+Budget is a universal parameter on all strategies. By default
+the budget is a hard ceiling; pass `budget_strict=False` to fall
+back to best-effort.
 
-**Planner** decomposes a complex task into subtasks using a
-cheap LLM, then assigns the optimal model to each step within
-your budget. If the plan exceeds budget, it automatically
-downgrades expensive steps.
+### Planner and Executor
 
-**Executor** runs a plan step by step, tracks actual token
-usage and cost via a `CostLedger`, and escalates to a stronger
-model if a step fails. Escalation tries stronger tiers first
-(flagship before mid) and filters by the step's required
-capabilities.
+**Planner** decomposes a task into subtasks using a cheap LLM,
+assigns the optimal model to each step within budget, and
+auto-downgrades expensive steps if over budget.
+
+**Executor** runs the plan via async DAG scheduling, tracks
+actual cost via `CostLedger`, and escalates to stronger models
+on failure (flagship before mid, filtered by capability).
+
+If `executor.execute(plan)` is called inside an existing event
+loop (Jupyter, FastAPI), it falls back to sequential execution.
+Use `await executor.aexecute(plan)` directly for concurrent DAG
+scheduling in async code.
 
 ### Observability
 
-Every execution produces a structured trace. Inspect which
-model was used, whether escalation occurred, and where each
-dollar went:
+Every execution produces a structured trace:
 
 ```python
 result = executor.execute(plan)
 
-# Per-step: which model ran, whether it was escalated
 for sr in result.step_results:
     print(f"Step {sr.step_id}: model={sr.model_id}, "
-          f"cost=${sr.actual_cost:.4f}, "
-          f"escalated={sr.escalated}")
+          f"cost=${sr.actual_cost:.4f}, escalated={sr.escalated}")
 
-# Cost ledger: every LLM call including failed attempts
 for entry in result.ledger.entries:
     print(f"  {entry.reason}: {entry.model_id} "
-          f"({entry.input_tokens}in/"
-          f"{entry.output_tokens}out) "
-          f"${entry.cost:.6f} "
-          f"{'ok' if entry.success else 'FAIL'}")
+          f"({entry.input_tokens}in/{entry.output_tokens}out) "
+          f"${entry.cost:.6f} {'ok' if entry.success else 'FAIL'}")
 
-# Aggregate
 print(f"Total: ${result.total_cost:.4f}, "
       f"wasted: ${result.ledger.wasted_cost:.4f}, "
       f"remaining: ${result.budget_remaining:.4f}")
@@ -400,17 +236,87 @@ Step 1: model=openai/gpt-4.1, cost=$0.0052, escalated=True
 Total: $0.0052, wasted: $0.0000, remaining: $0.9948
 ```
 
-## Routing Strategies
+### Routing Strategies
 
 | Strategy | When to Use | How It Works |
 |---|---|---|
-| `cheapest` | Minimize cost | Picks the lowest-price capable model |
-| `best_quality` | Maximize quality | Picks the best flagship-tier capable model |
+| `cheapest` | Minimize cost | Lowest-price capable model |
+| `best_quality` | Maximize quality | Best flagship-tier capable model |
 | `balanced` | Default | Matches model tier to query complexity |
 
-All strategies enforce the budget as a hard ceiling. Pass
-`budget_strict=False` in the Python API to fall back to
-best-effort behavior.
+## Comparison
+
+High-level feature comparison with other tools:
+
+| Feature | TokenWise | [RouteLLM](https://github.com/lm-sys/RouteLLM) | [LiteLLM](https://github.com/BerriAI/litellm) | [Not Diamond](https://notdiamond.ai) | [Martian](https://withmartian.com) | [Portkey](https://portkey.ai) | [OpenRouter](https://openrouter.ai) |
+|---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| Task decomposition | **Yes** | - | - | - | - | - | - |
+| Strict budget ceiling | **Yes** | - | Yes | - | Per-request | Yes | Yes |
+| Tier-based escalation | **Yes** | - | Yes | - | - | Yes | - |
+| Capability-aware fallback | **Yes** | - | - | Partial | Yes | Partial | Partial |
+| Cost ledger | **Yes** | - | Yes | - | - | Yes | Dashboard |
+| OpenAI-compatible proxy | **Yes** | Yes | Yes | Yes | Yes | Yes | Yes |
+| CLI | **Yes** | - | Yes | - | - | - | - |
+| Self-hosted / open source | **Yes** | Yes | Yes | - | - | Gateway only | - |
+
+The table reflects our understanding as of February 2026;
+corrections welcome via
+[issues](https://github.com/itsarbit/tokenwise/issues).
+
+## Benchmarks
+
+`benchmarks/pareto.py` runs 5 tasks across models at different
+price tiers and reports cost vs success rate. Single command to
+reproduce (outputs `benchmarks/results.csv` and
+`benchmarks/pareto.png`):
+
+```bash
+uv sync --group benchmark && uv run python benchmarks/pareto.py \
+  --models openai/gpt-4.1-nano deepseek/deepseek-chat \
+    openai/gpt-4.1-mini google/gemini-2.5-flash \
+    openai/gpt-4.1 anthropic/claude-sonnet-4 \
+    google/gemini-2.5-pro anthropic/claude-opus-4.6 \
+    openai/o4-mini google/gemini-3.1-pro-preview \
+  --csv benchmarks/results.csv --output benchmarks/pareto.png
+```
+
+Sample results (February 2026, 5 simple tasks per model):
+
+| Model | Tier | Success | Avg Cost / Task |
+|---|---|---|---|
+| openai/gpt-4.1-nano | budget | 100% | $0.000059 |
+| deepseek/deepseek-chat | budget | 100% | $0.000174 |
+| openai/gpt-4.1-mini | budget | 100% | $0.000238 |
+| google/gemini-2.5-flash | budget | 100% | $0.000498 |
+| openai/o4-mini | mid | 100% | $0.001137 |
+| openai/gpt-4.1 | mid | 100% | $0.001201 |
+| anthropic/claude-sonnet-4 | mid | 100% | $0.002681 |
+| google/gemini-2.5-pro | mid | 100% | $0.002913 |
+| google/gemini-3.1-pro-preview | flagship | 100% | $0.003490 |
+| anthropic/claude-opus-4.6 | flagship | 100% | $0.005029 |
+
+All models pass simple tasks — the value shows in cost: ~85x
+spread between cheapest and most expensive. Harder tasks
+(multi-step reasoning, long-context coding) will show quality
+differentiation where escalation shifts the frontier rightward.
+
+## Known Limitations (v0.4)
+
+All three v0.3 limitations have been resolved:
+
+- ~~Planner cost not budgeted~~ — tracked and deducted (v0.4)
+- ~~Linear execution~~ — parallel DAG scheduling (v0.4)
+- ~~No persistent spend tracking~~ — JSONL ledger (v0.4)
+
+## Budget Semantics
+
+TokenWise enforces budget ceilings by capping `max_tokens`
+before each LLM call. Input token counts are estimated using a
+`chars / 4` heuristic with a 1.2x safety margin — not a
+tokenizer. The budget ceiling is real and enforced, but small
+overruns are possible when the heuristic underestimates input
+tokens. A future release will support pluggable tokenizer-based
+estimation for stricter guarantees.
 
 ## Configuration
 
@@ -464,77 +370,6 @@ src/tokenwise/
     └── model_capabilities.json
 ```
 
-## Philosophy
-
-LLM systems should be treated like distributed systems.
-
-That means clear failure semantics, explicit cost ceilings,
-predictable escalation, and observability. TokenWise is
-designed with that philosophy.
-
-## Benchmarks
-
-`benchmarks/pareto.py` runs 5 tasks across models at different
-price tiers and reports cost vs success rate. Single command to
-reproduce (outputs `benchmarks/results.csv` and
-`benchmarks/pareto.png`):
-
-```bash
-uv sync --group benchmark && uv run python benchmarks/pareto.py \
-  --models openai/gpt-4.1-nano deepseek/deepseek-chat \
-    openai/gpt-4.1-mini google/gemini-2.5-flash \
-    openai/gpt-4.1 anthropic/claude-sonnet-4 \
-    google/gemini-2.5-pro anthropic/claude-opus-4.6 \
-    openai/o4-mini google/gemini-3.1-pro-preview \
-  --csv benchmarks/results.csv --output benchmarks/pareto.png
-```
-
-Sample results (February 2026, 5 simple tasks per model):
-
-| Model | Tier | Success | Avg Cost / Task |
-|---|---|---|---|
-| openai/gpt-4.1-nano | budget | 100% | $0.000059 |
-| deepseek/deepseek-chat | budget | 100% | $0.000174 |
-| openai/gpt-4.1-mini | budget | 100% | $0.000238 |
-| google/gemini-2.5-flash | budget | 100% | $0.000498 |
-| openai/o4-mini | mid | 100% | $0.001137 |
-| openai/gpt-4.1 | mid | 100% | $0.001201 |
-| anthropic/claude-sonnet-4 | mid | 100% | $0.002681 |
-| google/gemini-2.5-pro | mid | 100% | $0.002913 |
-| google/gemini-3.1-pro-preview | flagship | 100% | $0.003490 |
-| anthropic/claude-opus-4.6 | flagship | 100% | $0.005029 |
-
-All models pass simple tasks — the value shows in cost: ~85x
-spread between cheapest and most expensive. Harder tasks
-(multi-step reasoning, long-context coding) will show quality
-differentiation.
-
-## Known Limitations (v0.4)
-
-All three v0.3 limitations have been resolved:
-
-- ~~Planner cost not budgeted~~ — planner LLM cost is now
-  tracked and deducted from budget (v0.4)
-- ~~Linear execution~~ — independent steps now run in parallel
-  via async DAG scheduling (v0.4)
-- ~~No persistent spend tracking~~ — execution history is
-  persisted to JSONL; see `tokenwise ledger` (v0.4)
-
-**Note on `execute()` inside async contexts:** If you call
-`executor.execute(plan)` from inside an existing event loop
-(Jupyter, FastAPI, etc.), it automatically falls back to
-sequential step execution. For concurrent DAG scheduling in
-async code, use `await executor.aexecute(plan)` directly.
-
-\* **Budget accuracy note:** TokenWise enforces budget ceilings
-by capping `max_tokens` before each LLM call. Input token counts
-are estimated using a `chars / 4` heuristic with a 1.2x safety
-margin — not a tokenizer. This means actual input cost may differ
-slightly from the estimate. The budget ceiling is real and
-enforced, but small overruns are possible when the heuristic
-underestimates input tokens. A future release will support
-pluggable tokenizer-based estimation for stricter guarantees.
-
 ## Development
 
 ```bash
@@ -545,6 +380,17 @@ uv run pytest
 uv run ruff check src/ tests/
 uv run mypy src/
 ```
+
+## Philosophy
+
+LLM systems should be treated like distributed systems.
+That means clear failure semantics, explicit cost ceilings,
+predictable escalation, and observability. TokenWise is designed
+with that philosophy.
+
+> **Background reading:**
+> [LLM Routers Are Not Enough](https://itsarbit.substack.com/p/llm-routers-are-not-enough)
+> — the blog post that motivated TokenWise's design.
 
 ## License
 
