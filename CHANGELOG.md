@@ -2,6 +2,12 @@
 
 All notable changes to TokenWise will be documented in this file.
 
+## [0.4.4] - 2026-02-22
+
+### Changed
+- **README polish** — removed duplicate install section, modular CLI subsections, one-line feature bullets, compact Pareto plot with model labels, escalation shown in demo output, sharper positioning before comparison table
+- **Strategy benchmark plot** — smaller figure (7x4), tighter Y-axis, model name labels, directional x-axis hints
+
 ## [0.4.3] - 2026-02-22
 
 ### Fixed
