@@ -406,9 +406,6 @@ def plot_pareto(strategies: dict[str, StrategyResult], output_path: str) -> None
             if len(models) == 1:
                 model_labels[name] = next(iter(models)).split("/")[-1]
 
-    # Collect points for Pareto frontier line
-    pareto_points: list[tuple[float, float]] = []
-
     for name, sr in strategies.items():
         if not sr.results:
             continue
@@ -416,7 +413,6 @@ def plot_pareto(strategies: dict[str, StrategyResult], output_path: str) -> None
         x = sr.avg_cost
         y = sr.success_rate * 100
         is_esc = name == "TokenWise Escalation"
-        pareto_points.append((x, y))
 
         ax.scatter(
             x,
@@ -442,20 +438,6 @@ def plot_pareto(strategies: dict[str, StrategyResult], output_path: str) -> None
             color=sr.color,
             linespacing=1.3,
         )
-
-    # Draw Pareto frontier (connect non-dominated points)
-    pareto_points.sort(key=lambda p: p[0])
-    frontier: list[tuple[float, float]] = []
-    best_y = -1.0
-    for px, py in pareto_points:
-        if py > best_y:
-            frontier.append((px, py))
-            best_y = py
-    if len(frontier) >= 2:
-        fx = [p[0] for p in frontier]
-        fy = [p[1] for p in frontier]
-        ax.plot(fx, fy, color="#3498db", alpha=0.25, linewidth=1.5,
-                linestyle="--", zorder=1)
 
     ax.set_xscale("log")
     ax.set_xlabel("Avg Cost / Task (USD, log scale)", fontsize=9)
