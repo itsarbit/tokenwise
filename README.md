@@ -144,7 +144,7 @@ response = client.chat.completions.create(
 
 ![Routing Strategies](assets/pareto.png)
 
-*X-axis: average cost per task (USD, log scale). Y-axis: success rate (%).
+*X-axis: average cost per task (USD). Y-axis: success rate (%).
 The star marks the TokenWise escalation strategy, which uses `Router.route()`
 with escalating strategies (cheapest → balanced → best_quality) and retries
 on validation failure. Baselines use a single fixed model for all tasks.*

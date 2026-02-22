@@ -530,9 +530,8 @@ def plot_pareto(strategies: dict[str, StrategyResult], output_path: str) -> None
             linespacing=1.3,
         )
 
-    ax.set_xscale("log")
     ax.set_xlabel(
-        "\u2190 Cheaper          Avg Cost / Task (USD, log scale)"
+        "\u2190 Cheaper          Avg Cost / Task (USD)"
         "          More Expensive \u2192",
         fontsize=8,
     )
