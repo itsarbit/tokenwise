@@ -40,6 +40,15 @@ Status: Success | Total cost: $0.0007 | Budget remaining: $0.0493
 If a step fails, TokenWise automatically escalates to a
 stronger model and retries within budget.
 
+## Why
+
+Most LLM frameworks optimize for capability. TokenWise
+optimizes for cost governance. You declare a budget per
+request — TokenWise enforces it, selects the best model
+within that constraint, and escalates only when needed.
+No hidden traffic allocation, no implicit ceilings. All
+decisions are explicit and per-request.
+
 ## Quick Start
 
 ### Set your API key
