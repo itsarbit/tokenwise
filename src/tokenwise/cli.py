@@ -19,6 +19,7 @@ app = typer.Typer(
     name="tokenwise",
     help="TokenWise — Intelligent LLM Task Planner",
     no_args_is_help=True,
+    context_settings={"help_option_names": ["-h", "--help"]},
 )
 console = Console()
 
@@ -42,9 +43,13 @@ def models(
 
     from tokenwise.models import ModelTier
 
-    all_models = registry.find_models(
-        capability=capability,
-        tier=ModelTier(tier) if tier else None,
+    _tier_rank = {ModelTier.FLAGSHIP: 0, ModelTier.MID: 1, ModelTier.BUDGET: 2}
+    all_models = sorted(
+        registry.find_models(
+            capability=capability,
+            tier=ModelTier(tier) if tier else None,
+        ),
+        key=lambda m: (_tier_rank.get(m.tier, 9), -m.input_price),
     )
 
     table = Table(title="Available Models")
