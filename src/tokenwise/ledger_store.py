@@ -46,18 +46,7 @@ class LedgerStore:
 
     def load(self, limit: int = 50) -> list[dict[str, Any]]:
         """Read and return most recent N records."""
-        if not self.path.exists():
-            return []
-        records: list[dict[str, Any]] = []
-        with open(self.path) as f:
-            for line in f:
-                line = line.strip()
-                if line:
-                    try:
-                        records.append(json.loads(line))
-                    except json.JSONDecodeError:
-                        logger.warning("Skipping malformed ledger line")
-        return records[-limit:]
+        return self._load_all()[-limit:]
 
     def summary(self) -> dict[str, Any]:
         """Return aggregate spend statistics."""

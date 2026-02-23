@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
@@ -26,8 +27,6 @@ _DIRECT_PROVIDERS: dict[str, tuple[str, str]] = {
 def _import_class(dotted_path: str) -> type[Any]:
     """Import a class from a dotted module path."""
     module_path, class_name = dotted_path.rsplit(".", 1)
-    import importlib
-
     module = importlib.import_module(module_path)
     cls: type[Any] = getattr(module, class_name)
     return cls

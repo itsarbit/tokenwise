@@ -177,6 +177,7 @@ class AnthropicProvider:
         )
         payload["stream"] = True
 
+        done_sent = False
         async with _shared_or_ephemeral(self._http_client, timeout) as client:
             async with client.stream(
                 "POST",
@@ -191,6 +192,7 @@ class AnthropicProvider:
                     data_str = line.removeprefix("data: ").strip()
                     if data_str == "[DONE]":
                         yield "data: [DONE]"
+                        done_sent = True
                         break
                     try:
                         event = json.loads(data_str)
@@ -203,8 +205,9 @@ class AnthropicProvider:
                     if chunk_line:
                         yield chunk_line
 
-        # Ensure we always send [DONE]
-        yield "data: [DONE]"
+        # Ensure [DONE] is sent exactly once even if the stream ended without one
+        if not done_sent:
+            yield "data: [DONE]"
 
     @staticmethod
     def _convert_stream_event(

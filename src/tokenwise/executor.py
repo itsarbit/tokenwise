@@ -562,45 +562,15 @@ class Executor:
             required_caps = {c for c in failed_model.capabilities if c != "general"}
 
         # Collect candidates from tiers >= failed tier, stronger tiers first
-        stronger: list[ModelInfo] = []
-        same_tier: list[ModelInfo] = []
-
-        for tier in [ModelTier.FLAGSHIP, ModelTier.MID, ModelTier.BUDGET]:
-            tier_strength = _TIER_STRENGTH[tier]
-            if tier_strength < failed_strength:
-                continue
-            models = self.registry.find_models(tier=tier)
-            for m in models:
-                if m.id in exclude or m.input_price <= 0:
-                    continue
-                # Capability filtering: candidate must have ALL required capabilities
-                if required_caps and not required_caps.issubset(set(m.capabilities)):
-                    continue
-                est = m.estimate_cost(step.estimated_input_tokens, step.estimated_output_tokens)
-                if est > budget_remaining:
-                    continue
-                if tier_strength > failed_strength:
-                    stronger.append(m)
-                else:
-                    same_tier.append(m)
+        stronger, same_tier = self._collect_candidates(
+            exclude, failed_strength, budget_remaining, step, required_caps
+        )
 
         # If strict capability filtering eliminated everything, relax and retry
         if not (stronger or same_tier) and required_caps:
-            for tier in [ModelTier.FLAGSHIP, ModelTier.MID, ModelTier.BUDGET]:
-                tier_strength = _TIER_STRENGTH[tier]
-                if tier_strength < failed_strength:
-                    continue
-                models = self.registry.find_models(tier=tier)
-                for m in models:
-                    if m.id in exclude or m.input_price <= 0:
-                        continue
-                    est = m.estimate_cost(step.estimated_input_tokens, step.estimated_output_tokens)
-                    if est > budget_remaining:
-                        continue
-                    if tier_strength > failed_strength:
-                        stronger.append(m)
-                    else:
-                        same_tier.append(m)
+            stronger, same_tier = self._collect_candidates(
+                exclude, failed_strength, budget_remaining, step, required_caps=set()
+            )
 
         # Sort each group by price descending (more expensive = likely better)
         stronger.sort(key=lambda m: m.input_price, reverse=True)
@@ -615,6 +585,35 @@ class Executor:
                 results.append(m)
 
         return results
+
+    def _collect_candidates(
+        self,
+        exclude: set[str],
+        failed_strength: int,
+        budget_remaining: float,
+        step: Step,
+        required_caps: set[str],
+    ) -> tuple[list[ModelInfo], list[ModelInfo]]:
+        """Collect fallback models split into (stronger, same_tier) lists."""
+        stronger: list[ModelInfo] = []
+        same_tier: list[ModelInfo] = []
+        for tier in [ModelTier.FLAGSHIP, ModelTier.MID, ModelTier.BUDGET]:
+            tier_strength = _TIER_STRENGTH[tier]
+            if tier_strength < failed_strength:
+                continue
+            for m in self.registry.find_models(tier=tier):
+                if m.id in exclude or m.input_price <= 0:
+                    continue
+                if required_caps and not required_caps.issubset(set(m.capabilities)):
+                    continue
+                est = m.estimate_cost(step.estimated_input_tokens, step.estimated_output_tokens)
+                if est > budget_remaining:
+                    continue
+                if tier_strength > failed_strength:
+                    stronger.append(m)
+                else:
+                    same_tier.append(m)
+        return stronger, same_tier
 
     def _escalate(
         self,

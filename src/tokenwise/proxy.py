@@ -14,6 +14,7 @@ from fastapi import FastAPI, HTTPException
 from starlette.responses import StreamingResponse
 
 from tokenwise.config import get_settings
+from tokenwise.executor import _TIER_STRENGTH
 from tokenwise.models import (
     ChatCompletionChoice,
     ChatCompletionRequest,
@@ -157,13 +158,12 @@ def _get_fallback_models(exclude: set[str], failed_model_id: str | None = None) 
                 required_cap = cap
                 break
 
-    tier_strength = {ModelTier.BUDGET: 0, ModelTier.MID: 1, ModelTier.FLAGSHIP: 2}
-    min_strength = tier_strength.get(failed_tier, 0)
+    min_strength = _TIER_STRENGTH.get(failed_tier, 0)
 
     # Collect tiers in descending strength order (stronger first)
     candidates: list[str] = []
     for tier in [ModelTier.FLAGSHIP, ModelTier.MID, ModelTier.BUDGET]:
-        if tier_strength[tier] < min_strength:
+        if _TIER_STRENGTH[tier] < min_strength:
             continue
         for m in state.registry.find_models(tier=tier):
             if m.id in exclude or m.input_price <= 0:
@@ -175,7 +175,7 @@ def _get_fallback_models(exclude: set[str], failed_model_id: str | None = None) 
     # If capability filtering eliminated everything, relax and try without it
     if not candidates and required_cap:
         for tier in [ModelTier.FLAGSHIP, ModelTier.MID, ModelTier.BUDGET]:
-            if tier_strength[tier] < min_strength:
+            if _TIER_STRENGTH[tier] < min_strength:
                 continue
             for m in state.registry.find_models(tier=tier):
                 if m.id not in exclude and m.input_price > 0:
