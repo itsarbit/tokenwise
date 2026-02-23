@@ -6,7 +6,7 @@ Runnable scripts demonstrating each core feature of TokenWise.
 
 - Python 3.10+
 - [uv](https://docs.astral.sh/uv/) (or pip)
-- An OpenRouter API key — get one at <https://openrouter.ai/keys>
+- An [OpenRouter](https://openrouter.ai/) API key — get one at <https://openrouter.ai/keys>
 
 ```bash
 export OPENROUTER_API_KEY="sk-or-..."
@@ -60,6 +60,14 @@ uv run python examples/04_proxy_client.py
 ```
 
 Estimated cost: **$0.01–$0.05** per run.
+
+### 🦞 OpenClaw Integration
+
+Step-by-step guide to using TokenWise as a drop-in proxy for
+[OpenClaw](https://github.com/open-claw/open-claw) — budget enforcement,
+intelligent routing, and multi-provider failover with zero code changes.
+
+See [openclaw_integration.md](openclaw_integration.md).
 
 ## Total Cost
 

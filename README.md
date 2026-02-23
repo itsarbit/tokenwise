@@ -131,6 +131,11 @@ response = client.chat.completions.create(
 )
 ```
 
+### 🦞 OpenClaw integration
+
+Use TokenWise as a drop-in proxy for [OpenClaw](https://github.com/open-claw/open-claw) —
+see the [integration guide](examples/openclaw_integration.md).
+
 ## Core Features
 
 - **Budget-aware routing** — cost ceilings enforced via `max_tokens` caps with conservative estimation ([details](#budget-semantics)).
