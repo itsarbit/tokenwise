@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/logo.png" alt="TokenWise" width="540">
+  <img src="https://raw.githubusercontent.com/itsarbit/tokenwise/master/assets/logo.png" alt="TokenWise" width="540">
 </p>
 
 <h1 align="center">TokenWise</h1>
@@ -101,10 +101,11 @@ Budget is a universal parameter on all strategies. Pass
 ```python
 from tokenwise import Router, Planner, Executor
 
-# Route a single query
+# Route a single query (with structured trace)
 router = Router()
-model = router.route("Explain quantum computing", strategy="balanced", budget=0.10)
+model, trace = router.route_with_trace("Explain quantum computing", strategy="balanced", budget=0.10)
 print(f"{model.id} (${model.input_price}/M input)")
+print(f"Request: {trace.request_id}, state: {trace.termination_state.value}")
 
 # Plan and execute a complex task
 planner = Planner()
@@ -139,15 +140,17 @@ see the [integration guide](examples/openclaw_integration.md).
 ## Core Features
 
 - **Budget-aware routing** — cost ceilings enforced via `max_tokens` caps with conservative estimation ([details](#budget-semantics)).
-- **Tiered escalation** — budget, mid, flagship; escalates upward on failure, never downward.
+- **Tiered escalation** — budget, mid, flagship; escalates upward on failure, never downward. Monotonic mode available (`TOKENWISE_ESCALATION_POLICY=monotonic`).
 - **Capability-aware fallback** — routes and fallbacks filtered by `code`, `reasoning`, `math`, or `general`.
 - **Task decomposition** — LLM-powered planning with per-step model assignment and async DAG scheduling.
+- **Routing traces** — structured `RoutingTrace` on every request with request_id, escalation records, termination state, and budget tracking.
+- **Risk gate** — opt-in rule-based check that blocks destructive or ambiguous queries before routing (`TOKENWISE_RISK_GATE_ENABLED=true`).
 - **Cost ledger** — structured per-call accounting including failures and retries, persisted to JSONL.
 - **Multi-provider failover** — OpenRouter, OpenAI, Anthropic, and Google with connection pooling.
 
 ## Benchmark: Cost–Quality Frontier
 
-![Routing Strategies](assets/pareto.png)
+![Routing Strategies](https://raw.githubusercontent.com/itsarbit/tokenwise/master/assets/pareto.png)
 
 *X-axis: average cost per task (USD). Y-axis: success rate (%).
 The star marks the TokenWise escalation strategy, which uses `Router.route()`
@@ -289,6 +292,15 @@ Every execution produces a structured trace:
 ```python
 result = executor.execute(plan)
 
+# Routing trace with termination state and escalation records
+if result.routing_trace:
+    rt = result.routing_trace
+    print(f"Request: {rt.request_id}, state: {rt.termination_state.value}")
+    print(f"Model: {rt.initial_model} -> {rt.final_model}")
+    for esc in rt.escalations:
+        print(f"  Escalated: {esc.from_model} -> {esc.to_model} ({esc.reason_code.value})")
+
+# Per-step results and cost ledger
 for sr in result.step_results:
     print(f"Step {sr.step_id}: model={sr.model_id}, "
           f"cost=${sr.actual_cost:.4f}, escalated={sr.escalated}")
@@ -306,6 +318,9 @@ print(f"Total: ${result.total_cost:.4f}, "
 Example output when step 1 fails and escalates:
 
 ```
+Request: a3f1b2c4d5e6, state: completed
+Model: openai/gpt-4.1-mini -> openai/gpt-4.1
+  Escalated: openai/gpt-4.1-mini -> openai/gpt-4.1 (model_error)
 Step 1: model=openai/gpt-4.1, cost=$0.0052, escalated=True
   step 1 attempt 1: openai/gpt-4.1-mini (82in/0out) $0.000000 FAIL
   step 1 escalation attempt 1: openai/gpt-4.1 (82in/204out) $0.001800 ok
@@ -322,13 +337,15 @@ overruns are possible when the heuristic underestimates input
 tokens. A future release will support pluggable tokenizer-based
 estimation for stricter guarantees.
 
-## Known Limitations (v0.4)
+## Known Limitations (v0.5)
 
-All three v0.3 limitations have been resolved:
+All previous limitations have been resolved:
 
 - ~~Planner cost not budgeted~~ — tracked and deducted (v0.4)
 - ~~Linear execution~~ — parallel DAG scheduling (v0.4)
 - ~~No persistent spend tracking~~ — JSONL ledger (v0.4)
+- ~~No routing audit trail~~ — structured `RoutingTrace` (v0.5)
+- ~~No escalation policy control~~ — monotonic mode (v0.5)
 
 ## Configuration
 
@@ -350,6 +367,11 @@ an optional config file (`~/.config/tokenwise/config.yaml`).
 | `TOKENWISE_CACHE_TTL` | Optional | Registry cache TTL (s) | `3600` |
 | `TOKENWISE_LEDGER_PATH` | Optional | Ledger JSONL path | `~/.config/tokenwise/ledger.jsonl` |
 | `TOKENWISE_MIN_OUTPUT_TOKENS` | Optional | Min output tokens per step | `100` |
+| `TOKENWISE_ESCALATION_POLICY` | Optional | `flexible` or `monotonic` | `flexible` |
+| `TOKENWISE_TRACE_LEVEL` | Optional | `basic` or `verbose` | `basic` |
+| `TOKENWISE_RISK_GATE_ENABLED` | Optional | Enable risk gate | `false` |
+| `TOKENWISE_RISK_GATE_IRREVERSIBLE_BLOCK` | Optional | Block destructive operations | `true` |
+| `TOKENWISE_RISK_GATE_AMBIGUITY_THRESHOLD` | Optional | Ambiguity score threshold (0.0–1.0) | `0.9` |
 | `TOKENWISE_LOCAL_MODELS` | Optional | Local models YAML | — |
 
 ```yaml
@@ -357,6 +379,12 @@ an optional config file (`~/.config/tokenwise/config.yaml`).
 default_strategy: balanced
 default_budget: 0.50
 planner_model: openai/gpt-4.1-mini
+escalation_policy: flexible     # or monotonic
+trace_level: basic              # or verbose
+risk_gate:
+  enabled: false
+  irreversible_block: true
+  ambiguity_threshold: 0.9
 ```
 
 ## Development
@@ -378,6 +406,7 @@ src/tokenwise/
 ├── router.py        # Two-stage pipeline: scenario → strategy
 ├── planner.py       # Decomposes tasks, assigns models
 ├── executor.py      # Runs plans, tracks spend, escalates
+├── risk_gate.py     # Rule-based risk gate (destructive/ambiguous queries)
 ├── ledger_store.py  # Persistent JSONL spend history
 ├── cli.py           # Typer CLI
 ├── proxy.py         # FastAPI OpenAI-compatible proxy

@@ -9,8 +9,19 @@ from __future__ import annotations
 
 import re
 
-from tokenwise.models import ModelInfo, ModelTier, RoutingStrategy
+from tokenwise.config import get_settings
+from tokenwise.models import (
+    EscalationPolicy,
+    ModelInfo,
+    ModelTier,
+    RiskGateBlockedError,
+    RoutingStrategy,
+    RoutingTrace,
+    TerminationState,
+    TraceLevel,
+)
 from tokenwise.registry import ModelRegistry
+from tokenwise.risk_gate import evaluate_risk
 
 # Word-boundary keyword patterns for detecting query needs
 _CODE_PATTERNS = [
@@ -74,6 +85,20 @@ class Router:
     def __init__(self, registry: ModelRegistry | None = None) -> None:
         self.registry = registry or ModelRegistry()
 
+    @staticmethod
+    def _detect_scenario(
+        query: str, required_capability: str | None = None
+    ) -> tuple[str | None, str]:
+        """Detect primary capability and complexity from a query.
+
+        Returns:
+            (primary_capability, complexity)
+        """
+        detected_caps = _detect_capabilities(query)
+        primary_cap = required_capability or (detected_caps[0] if detected_caps else None)
+        complexity = _estimate_complexity(query)
+        return primary_cap, complexity
+
     def route(
         self,
         query: str,
@@ -103,9 +128,7 @@ class Router:
             strategy = RoutingStrategy(strategy)
 
         # ── Stage 1: Scenario detection ──────────────────────────────
-        detected_caps = _detect_capabilities(query)
-        primary_cap = required_capability or (detected_caps[0] if detected_caps else None)
-        complexity = _estimate_complexity(query)
+        primary_cap, complexity = self._detect_scenario(query, required_capability)
 
         # ── Stage 2: Filter → Route ─────────────────────────────────
         # Filter by capability
@@ -138,6 +161,62 @@ class Router:
             return self._route_best_quality(candidates)
         else:  # balanced
             return self._route_balanced(candidates, complexity)
+
+    def route_with_trace(
+        self,
+        query: str,
+        strategy: RoutingStrategy | str = RoutingStrategy.BALANCED,
+        budget: float | None = None,
+        required_capability: str | None = None,
+        budget_strict: bool = True,
+    ) -> tuple[ModelInfo, RoutingTrace]:
+        """Route a query and return both the model and a structured trace.
+
+        Same logic as ``route()`` but additionally returns a ``RoutingTrace``
+        with audit metadata. Runs the risk gate check when enabled.
+
+        Raises:
+            RiskGateBlockedError: If the risk gate blocks the query.
+            ValueError: If no suitable model is found.
+        """
+        settings = get_settings()
+        try:
+            policy = EscalationPolicy(settings.escalation_policy)
+        except ValueError:
+            policy = EscalationPolicy.FLEXIBLE
+        try:
+            level = TraceLevel(settings.trace_level)
+        except ValueError:
+            level = TraceLevel.BASIC
+        trace = RoutingTrace(escalation_policy=policy, trace_level=level)
+
+        # Risk gate check
+        risk_result = evaluate_risk(query, settings.risk_gate)
+        if risk_result.blocked:
+            trace.termination_state = TerminationState.NO_GO
+            raise RiskGateBlockedError(reason=risk_result.reason, trace=trace)
+
+        model = self.route(
+            query=query,
+            strategy=strategy,
+            budget=budget,
+            required_capability=required_capability,
+            budget_strict=budget_strict,
+        )
+
+        trace.initial_model = model.id
+        trace.initial_tier = model.tier
+        trace.final_model = model.id
+        trace.final_tier = model.tier
+        trace.termination_state = TerminationState.COMPLETED
+        if budget is not None:
+            _, complexity = self._detect_scenario(query, required_capability)
+            est_in, est_out = _TOKEN_ESTIMATES.get(complexity, (1000, 500))
+            est_cost = model.estimate_cost(est_in, est_out)
+            trace.budget_used = est_cost
+            trace.budget_remaining = budget - est_cost
+
+        return model, trace
 
     def _filter_by_budget(
         self, candidates: list[ModelInfo], budget: float, complexity: str

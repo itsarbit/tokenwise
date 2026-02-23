@@ -11,6 +11,7 @@ from rich.table import Table
 from tokenwise.config import get_settings
 from tokenwise.executor import Executor
 from tokenwise.ledger_store import LedgerStore
+from tokenwise.models import RiskGateBlockedError
 from tokenwise.planner import Planner
 from tokenwise.registry import ModelRegistry
 from tokenwise.router import Router
@@ -96,12 +97,18 @@ def route(
     router = Router(registry)
 
     try:
-        model = router.route(
+        model, trace = router.route_with_trace(
             query=query,
             strategy=strategy,
             budget=budget,
             required_capability=capability,
         )
+    except RiskGateBlockedError as e:
+        console.print(f"[red]Risk gate blocked: {e.reason}[/red]")
+        if e.trace:
+            console.print(f"  Request ID: {e.trace.request_id}")
+            console.print(f"  Termination: {e.trace.termination_state.value}")
+        raise typer.Exit(1)
     except ValueError as e:
         console.print(f"[red]Routing failed: {e}[/red]")
         raise typer.Exit(1)
@@ -114,6 +121,8 @@ def route(
     console.print(f"  Context window: {model.context_window:,} tokens")
     if model.capabilities:
         console.print(f"  Capabilities: {', '.join(model.capabilities)}")
+    console.print(f"\n[dim]  Request ID: {trace.request_id}[/dim]")
+    console.print(f"[dim]  Termination: {trace.termination_state.value}[/dim]")
 
 
 @app.command()
@@ -221,6 +230,30 @@ def plan(
         if result.final_output:
             console.print(f"\n[bold]Output:[/bold]\n{result.final_output[:2000]}")
 
+        # Display routing trace summary
+        if result.routing_trace:
+            rt = result.routing_trace
+            console.print("\n[bold]Routing Trace:[/bold]")
+            console.print(f"  Request ID: {rt.request_id}")
+            console.print(f"  Initial model: {rt.initial_model} ({rt.initial_tier.value})")
+            console.print(f"  Final model: {rt.final_model} ({rt.final_tier.value})")
+            console.print(f"  Termination: {rt.termination_state.value}")
+            console.print(f"  Escalation policy: {rt.escalation_policy.value}")
+            if rt.escalations:
+                esc_table = Table(title="Escalations")
+                esc_table.add_column("Step", justify="right", style="cyan")
+                esc_table.add_column("From", style="magenta")
+                esc_table.add_column("To", style="green")
+                esc_table.add_column("Reason", style="yellow")
+                for esc in rt.escalations:
+                    esc_table.add_row(
+                        str(esc.step_id or "-"),
+                        f"{esc.from_model} ({esc.from_tier.value})",
+                        f"{esc.to_model} ({esc.to_tier.value})",
+                        esc.reason_code.value,
+                    )
+                console.print(esc_table)
+
         # Persist to ledger store
         settings = get_settings()
         store_path = Path(settings.ledger_path) if settings.ledger_path else None
@@ -231,6 +264,7 @@ def plan(
             budget=task_plan.budget,
             success=result.success,
             planner_cost=task_plan.planner_cost,
+            trace=result.routing_trace,
         )
         console.print(f"\n[dim]Saved to ledger: {store.path}[/dim]")
 

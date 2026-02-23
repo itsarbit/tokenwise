@@ -2,6 +2,32 @@
 
 All notable changes to TokenWise will be documented in this file.
 
+## [0.5.0] - 2026-02-23
+
+### Added
+- **Routing traces** — `Router.route_with_trace()` returns a structured `RoutingTrace` with request_id, initial/final model and tier, escalation records, termination state, and budget usage; `PlanResult.routing_trace` carries the trace through execution
+- **Termination states** — every routing/execution session ends with an explicit `TerminationState`: `completed`, `exhausted`, `failed`, `aborted`, or `no_go`
+- **Risk gate** — lightweight, rule-based check that blocks dangerous queries (destructive operations like `DELETE ... database`, `rm -rf`, `DROP TABLE`) and ambiguous requests; opt-in via `TOKENWISE_RISK_GATE_ENABLED=true`; raises `RiskGateBlockedError` with attached trace
+- **Monotonic escalation** — new `TOKENWISE_ESCALATION_POLICY=monotonic` mode restricts fallback to strictly stronger tiers (no same-tier retries); default remains `flexible`
+- **Escalation records** — each fallback attempt is recorded as an `EscalationRecord` with from/to model, tier, reason code, and step ID; reason codes: `model_error`, `budget_exhausted`, `capability_mismatch`, `complexity_threshold`, `no_go`, `manual_override`
+- **Trace level config** — `TOKENWISE_TRACE_LEVEL` (`basic` / `verbose`) controls trace verbosity
+- **New exports** — `EscalationPolicy`, `EscalationReasonCode`, `RoutingTrace`, `TerminationState`, `TraceLevel` available from `tokenwise` package
+- **Proxy trace** — auto-routed responses include `tokenwise_trace` dict with request_id, initial/final model, termination_state, and models_tried
+- **Proxy risk gate** — returns HTTP 422 when risk gate blocks a request
+- **CLI trace display** — `tokenwise route` shows request_id and termination state; `tokenwise plan --execute` shows routing trace summary with escalation table
+- **Ledger trace** — `LedgerStore.save()` accepts optional `RoutingTrace` for persistence
+
+### Changed
+- **Executor** — escalation reason codes are now classified from failure details (HTTP status, error message) instead of hardcoded `MODEL_ERROR`
+- **CLI route** — now uses `route_with_trace()` and displays trace metadata
+
+## [0.4.5] - 2026-02-22
+
+### Changed
+- **Router benchmark** — aligned benchmark with Router strategies; tightened claims and added cost standard deviation
+- **Deduplicated fallback loops** — refactored executor and proxy fallback logic to reduce code duplication
+- **Anthropic streaming** — fixed double `[DONE]` yield in Anthropic provider adapter
+
 ## [0.4.4] - 2026-02-22
 
 ### Changed

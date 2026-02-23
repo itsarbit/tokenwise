@@ -9,7 +9,21 @@ from typing import Any
 import httpx
 
 from tokenwise.config import get_settings
-from tokenwise.models import CostLedger, ModelInfo, ModelTier, Plan, PlanResult, Step, StepResult
+from tokenwise.models import (
+    CostLedger,
+    EscalationPolicy,
+    EscalationReasonCode,
+    EscalationRecord,
+    ModelInfo,
+    ModelTier,
+    Plan,
+    PlanResult,
+    RoutingTrace,
+    Step,
+    StepResult,
+    TerminationState,
+    TraceLevel,
+)
 from tokenwise.providers import ProviderResolver
 from tokenwise.registry import ModelRegistry
 
@@ -78,6 +92,7 @@ class Executor:
     def _execute_sequential(self, plan: Plan) -> PlanResult:
         """Execute all steps sequentially (used when already in async context)."""
         result = PlanResult(task=plan.task, budget=plan.budget)
+        trace = self._make_trace()
         prior_outputs: dict[int, str] = {}
         self._failed_models.clear()
 
@@ -141,7 +156,8 @@ class Executor:
             has_budget = result.total_cost + step_result.actual_cost < plan.budget
             if not step_result.success and has_budget:
                 escalated = self._escalate(
-                    step, prompt, remaining - step_result.actual_cost, result.ledger
+                    step, prompt, remaining - step_result.actual_cost, result.ledger, trace,
+                    self._classify_escalation_reason(step_result),
                 )
                 if escalated is not None:
                     result.total_cost += step_result.actual_cost
@@ -159,6 +175,26 @@ class Executor:
         all_steps_ran = len(result.step_results) == len(plan.steps)
         all_succeeded = all(sr.success for sr in result.step_results)
         result.success = all_steps_ran and all_succeeded
+
+        # Populate trace
+        if result.step_results:
+            trace.initial_model = plan.steps[0].model_id
+            first_model = self.registry.get_model(plan.steps[0].model_id)
+            trace.initial_tier = first_model.tier if first_model else ModelTier.BUDGET
+            last_sr = result.step_results[-1]
+            trace.final_model = last_sr.model_id
+            final_model = self.registry.get_model(last_sr.model_id)
+            trace.final_tier = final_model.tier if final_model else ModelTier.BUDGET
+        trace.budget_used = result.total_cost
+        trace.budget_remaining = result.budget_remaining
+        if result.success:
+            trace.termination_state = TerminationState.COMPLETED
+        elif result.total_cost >= plan.budget:
+            trace.termination_state = TerminationState.EXHAUSTED
+        else:
+            trace.termination_state = TerminationState.FAILED
+        result.routing_trace = trace
+
         return result
 
     async def aexecute(self, plan: Plan) -> PlanResult:
@@ -169,6 +205,7 @@ class Executor:
         before launch, preventing parallel steps from collectively overshooting.
         """
         result = PlanResult(task=plan.task, budget=plan.budget)
+        trace = self._make_trace()
         self._failed_models.clear()
 
         # Build lookup structures
@@ -230,7 +267,7 @@ class Executor:
 
             # Execute launchable steps concurrently, each with its reserved budget
             tasks = [
-                self._arun_step(step, outputs, step.estimated_cost, result.ledger)
+                self._arun_step(step, outputs, step.estimated_cost, result.ledger, trace)
                 for step in launchable
             ]
             step_results = await asyncio.gather(*tasks)
@@ -252,6 +289,26 @@ class Executor:
         all_steps_ran = len(result.step_results) == len(plan.steps)
         all_succeeded = all(sr.success for sr in result.step_results)
         result.success = all_steps_ran and all_succeeded
+
+        # Populate trace
+        if result.step_results:
+            trace.initial_model = plan.steps[0].model_id
+            first_model = self.registry.get_model(plan.steps[0].model_id)
+            trace.initial_tier = first_model.tier if first_model else ModelTier.BUDGET
+            last_sr = sorted(result.step_results, key=lambda s: s.step_id)[-1]
+            trace.final_model = last_sr.model_id
+            final_model = self.registry.get_model(last_sr.model_id)
+            trace.final_tier = final_model.tier if final_model else ModelTier.BUDGET
+        trace.budget_used = result.total_cost
+        trace.budget_remaining = result.budget_remaining
+        if result.success:
+            trace.termination_state = TerminationState.COMPLETED
+        elif result.total_cost >= plan.budget:
+            trace.termination_state = TerminationState.EXHAUSTED
+        else:
+            trace.termination_state = TerminationState.FAILED
+        result.routing_trace = trace
+
         return result
 
     async def _arun_step(
@@ -260,6 +317,7 @@ class Executor:
         prior_outputs: dict[int, str],
         budget_remaining: float,
         ledger: CostLedger,
+        trace: RoutingTrace | None = None,
     ) -> StepResult:
         """Execute a single step asynchronously, with escalation on failure.
 
@@ -299,7 +357,10 @@ class Executor:
         has_budget = step_result.actual_cost < budget_remaining
         if not step_result.success and has_budget:
             failed_cost = step_result.actual_cost
-            escalated = await self._aescalate(step, prompt, budget_remaining - failed_cost, ledger)
+            escalated = await self._aescalate(
+                step, prompt, budget_remaining - failed_cost, ledger, trace,
+                self._classify_escalation_reason(step_result),
+            )
             if escalated is not None:
                 # Include the wasted cost from the failed attempt
                 escalated.actual_cost += failed_cost
@@ -383,6 +444,8 @@ class Executor:
         prompt: str,
         budget_remaining: float,
         ledger: CostLedger | None = None,
+        trace: RoutingTrace | None = None,
+        reason_code: EscalationReasonCode = EscalationReasonCode.MODEL_ERROR,
     ) -> StepResult | None:
         """Async version of _escalate: try alternative models on failure."""
         if ledger is None:
@@ -390,11 +453,25 @@ class Executor:
 
         logger.info("Escalating step %d — trying alternative models", step.id)
 
+        failed_model = self.registry.get_model(step.model_id)
+        failed_tier = failed_model.tier if failed_model else ModelTier.BUDGET
+
         tried = {step.model_id} | self._failed_models
         candidates = self._get_fallback_candidates(tried, budget_remaining, step)
 
         for attempt_num, model in enumerate(candidates[:5], start=1):
             tried.add(model.id)
+
+            if trace is not None:
+                trace.escalations.append(EscalationRecord(
+                    from_model=step.model_id,
+                    from_tier=failed_tier,
+                    to_model=model.id,
+                    to_tier=model.tier,
+                    reason_code=reason_code,
+                    step_id=step.id,
+                ))
+
             result = await self._aexecute_step(
                 step.id,
                 model.id,
@@ -537,6 +614,32 @@ class Executor:
             return step_result.http_status_code in _MODEL_UNUSABLE_CODES
         return False
 
+    @staticmethod
+    def _classify_escalation_reason(step_result: StepResult) -> EscalationReasonCode:
+        """Map a failed step result to an escalation reason code."""
+        if step_result.http_status_code in (402, 403, 404):
+            return EscalationReasonCode.MODEL_ERROR
+        error = step_result.error or ""
+        if "budget" in error.lower():
+            return EscalationReasonCode.BUDGET_EXHAUSTED
+        if "capability" in error.lower():
+            return EscalationReasonCode.CAPABILITY_MISMATCH
+        return EscalationReasonCode.MODEL_ERROR
+
+    @staticmethod
+    def _make_trace() -> RoutingTrace:
+        """Create a RoutingTrace populated from current settings."""
+        settings = get_settings()
+        try:
+            policy = EscalationPolicy(settings.escalation_policy)
+        except ValueError:
+            policy = EscalationPolicy.FLEXIBLE
+        try:
+            level = TraceLevel(settings.trace_level)
+        except ValueError:
+            level = TraceLevel.BASIC
+        return RoutingTrace(escalation_policy=policy, trace_level=level)
+
     def _get_fallback_candidates(
         self, exclude: set[str], budget_remaining: float, step: Step
     ) -> list[ModelInfo]:
@@ -571,6 +674,14 @@ class Executor:
             stronger, same_tier = self._collect_candidates(
                 exclude, failed_strength, budget_remaining, step, required_caps=set()
             )
+
+        # Monotonic mode: drop same-tier candidates (only escalate upward)
+        try:
+            policy = EscalationPolicy(get_settings().escalation_policy)
+        except ValueError:
+            policy = EscalationPolicy.FLEXIBLE
+        if policy == EscalationPolicy.MONOTONIC:
+            same_tier = []
 
         # Sort each group by price descending (more expensive = likely better)
         stronger.sort(key=lambda m: m.input_price, reverse=True)
@@ -621,6 +732,8 @@ class Executor:
         prompt: str,
         budget_remaining: float,
         ledger: CostLedger | None = None,
+        trace: RoutingTrace | None = None,
+        reason_code: EscalationReasonCode = EscalationReasonCode.MODEL_ERROR,
     ) -> StepResult | None:
         """Try re-running a failed step with alternative models.
 
@@ -632,12 +745,26 @@ class Executor:
 
         logger.info("Escalating step %d — trying alternative models", step.id)
 
+        failed_model = self.registry.get_model(step.model_id)
+        failed_tier = failed_model.tier if failed_model else ModelTier.BUDGET
+
         tried = {step.model_id} | self._failed_models
         candidates = self._get_fallback_candidates(tried, budget_remaining, step)
 
         # Try up to 5 alternative models
         for attempt_num, model in enumerate(candidates[:5], start=1):
             tried.add(model.id)
+
+            if trace is not None:
+                trace.escalations.append(EscalationRecord(
+                    from_model=step.model_id,
+                    from_tier=failed_tier,
+                    to_model=model.id,
+                    to_tier=model.tier,
+                    reason_code=reason_code,
+                    step_id=step.id,
+                ))
+
             result = self._execute_step(
                 step.id,
                 model.id,

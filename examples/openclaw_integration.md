@@ -134,7 +134,7 @@ tokenwise serve --host 0.0.0.0 --port 8000
 
 ```bash
 curl http://localhost:8000/health
-# {"status": "ok", "version": "0.4.5"}
+# {"status": "ok", "version": "0.5.0"}
 ```
 
 **Auto-reload** during development:

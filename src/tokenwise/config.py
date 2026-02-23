@@ -30,6 +30,14 @@ class MissingAPIKeyError(Exception):
 _DEFAULT_CONFIG_PATH = Path.home() / ".config" / "tokenwise" / "config.yaml"
 
 
+class RiskGateConfig(BaseModel):
+    """Configuration for the risk gate."""
+
+    enabled: bool = False
+    irreversible_block: bool = True
+    ambiguity_threshold: float = 0.9
+
+
 class Settings(BaseModel):
     """Application settings."""
 
@@ -66,6 +74,9 @@ class Settings(BaseModel):
         default=None,
         description="Per-model capability/tier overrides",
     )
+    escalation_policy: str = Field(default="flexible", description="flexible or monotonic")
+    risk_gate: RiskGateConfig = Field(default_factory=RiskGateConfig)
+    trace_level: str = Field(default="basic", description="basic or verbose")
 
     def require_api_key(self) -> str:
         """Return the OpenRouter API key or raise MissingAPIKeyError."""
@@ -93,6 +104,8 @@ def load_settings(config_path: Path | None = None) -> Settings:
         "ANTHROPIC_API_KEY": "anthropic_api_key",
         "GOOGLE_API_KEY": "google_api_key",
         "TOKENWISE_MIN_OUTPUT_TOKENS": "min_output_tokens",
+        "TOKENWISE_ESCALATION_POLICY": "escalation_policy",
+        "TOKENWISE_TRACE_LEVEL": "trace_level",
     }
 
     for env_var, field_name in env_map.items():
@@ -111,6 +124,25 @@ def load_settings(config_path: Path | None = None) -> Settings:
 
     # Env vars override config file
     merged = {**file_values, **env_values}
+
+    # Merge TOKENWISE_RISK_GATE_* env vars into risk_gate dict
+    risk_gate_env: dict[str, Any] = {}
+    rg_enabled = os.environ.get("TOKENWISE_RISK_GATE_ENABLED")
+    if rg_enabled is not None:
+        risk_gate_env["enabled"] = rg_enabled.lower() in ("1", "true", "yes")
+    rg_block = os.environ.get("TOKENWISE_RISK_GATE_IRREVERSIBLE_BLOCK")
+    if rg_block is not None:
+        risk_gate_env["irreversible_block"] = rg_block.lower() in ("1", "true", "yes")
+    rg_threshold = os.environ.get("TOKENWISE_RISK_GATE_AMBIGUITY_THRESHOLD")
+    if rg_threshold is not None:
+        risk_gate_env["ambiguity_threshold"] = float(rg_threshold)
+    if risk_gate_env:
+        existing = merged.get("risk_gate", {})
+        if isinstance(existing, dict):
+            merged["risk_gate"] = {**existing, **risk_gate_env}
+        else:
+            merged["risk_gate"] = risk_gate_env
+
     return Settings(**merged)
 
 

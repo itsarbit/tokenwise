@@ -20,11 +20,13 @@ from tokenwise.models import (
     ChatCompletionRequest,
     ChatCompletionResponse,
     ChatMessage,
+    EscalationPolicy,
     ModelTier,
     Usage,
 )
 from tokenwise.providers import ProviderResolver
 from tokenwise.registry import ModelRegistry
+from tokenwise.risk_gate import evaluate_risk
 from tokenwise.router import Router
 
 logger = logging.getLogger(__name__)
@@ -160,10 +162,20 @@ def _get_fallback_models(exclude: set[str], failed_model_id: str | None = None) 
 
     min_strength = _TIER_STRENGTH.get(failed_tier, 0)
 
+    # Monotonic mode: only allow strictly stronger tiers
+    try:
+        policy = EscalationPolicy(get_settings().escalation_policy)
+    except ValueError:
+        policy = EscalationPolicy.FLEXIBLE
+    strictly_greater = policy == EscalationPolicy.MONOTONIC
+
     # Collect tiers in descending strength order (stronger first)
     candidates: list[str] = []
     for tier in [ModelTier.FLAGSHIP, ModelTier.MID, ModelTier.BUDGET]:
-        if _TIER_STRENGTH[tier] < min_strength:
+        tier_strength = _TIER_STRENGTH[tier]
+        if strictly_greater and tier_strength <= min_strength:
+            continue
+        if not strictly_greater and tier_strength < min_strength:
             continue
         for m in state.registry.find_models(tier=tier):
             if m.id in exclude or m.input_price <= 0:
@@ -175,7 +187,10 @@ def _get_fallback_models(exclude: set[str], failed_model_id: str | None = None) 
     # If capability filtering eliminated everything, relax and try without it
     if not candidates and required_cap:
         for tier in [ModelTier.FLAGSHIP, ModelTier.MID, ModelTier.BUDGET]:
-            if _TIER_STRENGTH[tier] < min_strength:
+            tier_strength = _TIER_STRENGTH[tier]
+            if strictly_greater and tier_strength <= min_strength:
+                continue
+            if not strictly_greater and tier_strength < min_strength:
                 continue
             for m in state.registry.find_models(tier=tier):
                 if m.id not in exclude and m.input_price > 0:
@@ -225,6 +240,14 @@ async def chat_completions(
     request: ChatCompletionRequest,
 ) -> ChatCompletionResponse | StreamingResponse:
     """Handle chat completion requests with intelligent routing."""
+    # Risk gate check
+    settings = get_settings()
+    if settings.risk_gate.enabled:
+        last_msg = request.messages[-1].content or "" if request.messages else ""
+        risk_result = evaluate_risk(last_msg, settings.risk_gate)
+        if risk_result.blocked:
+            raise HTTPException(status_code=422, detail=f"Risk gate blocked: {risk_result.reason}")
+
     model_id, is_auto, payload = _resolve_model_and_payload(request)
 
     if request.stream:
@@ -291,12 +314,24 @@ async def chat_completions(
         total_tokens=usage_data.get("total_tokens", 0),
     )
 
+    trace_dict = None
+    if is_auto:
+        models_tried_list = [mid for mid in models_to_try if mid in tried]
+        trace_dict = {
+            "request_id": uuid.uuid4().hex[:12],
+            "initial_model": models_to_try[0] if models_to_try else model_id,
+            "final_model": model_id,
+            "termination_state": "completed",
+            "models_tried": models_tried_list,
+        }
+
     return ChatCompletionResponse(
         id=f"tw-{uuid.uuid4().hex[:12]}",
         created=int(time.time()),
         model=model_id,
         choices=choices,
         usage=usage,
+        tokenwise_trace=trace_dict,
     )
 
 

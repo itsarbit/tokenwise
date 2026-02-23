@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from tokenwise.models import CostLedger
+from tokenwise.models import CostLedger, RoutingTrace
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +28,7 @@ class LedgerStore:
         budget: float,
         success: bool,
         planner_cost: float = 0.0,
+        trace: RoutingTrace | None = None,
     ) -> None:
         """Append one JSON line recording a plan execution."""
         record: dict[str, Any] = {
@@ -40,6 +41,8 @@ class LedgerStore:
             "wasted_cost": ledger.wasted_cost,
             "entries": [e.model_dump() for e in ledger.entries],
         }
+        if trace is not None:
+            record["routing_trace"] = trace.model_dump()
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with open(self.path, "a") as f:
             f.write(json.dumps(record) + "\n")

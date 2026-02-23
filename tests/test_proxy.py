@@ -218,6 +218,82 @@ class TestChatCompletions:
             assert resp.json()["model"] == "openai/gpt-4.1-mini"
 
 
+class TestTraceInResponse:
+    def test_auto_routed_has_trace(self, client):
+        """Auto-routed response should include tokenwise_trace."""
+        mock_provider = MockProvider(
+            response={
+                **_UPSTREAM_RESPONSE,
+                "choices": [
+                    {
+                        "message": {"role": "assistant", "content": "Hi!"},
+                        "finish_reason": "stop",
+                    }
+                ],
+            }
+        )
+        with patch.object(
+            state.resolver,
+            "resolve",
+            return_value=(mock_provider, "gpt-4.1-mini"),
+        ):
+            resp = client.post(
+                "/v1/chat/completions",
+                json={
+                    "model": "auto",
+                    "messages": [{"role": "user", "content": "Hello"}],
+                },
+            )
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data.get("tokenwise_trace") is not None
+            trace = data["tokenwise_trace"]
+            assert "request_id" in trace
+            assert trace["termination_state"] == "completed"
+            assert trace["final_model"]
+
+    def test_passthrough_no_trace(self, client):
+        """Direct model passthrough should NOT include tokenwise_trace."""
+        mock_provider = MockProvider(response=_UPSTREAM_RESPONSE)
+        with patch.object(
+            state.resolver,
+            "resolve",
+            return_value=(mock_provider, "gpt-4.1-mini"),
+        ):
+            resp = client.post(
+                "/v1/chat/completions",
+                json={
+                    "model": "openai/gpt-4.1-mini",
+                    "messages": [{"role": "user", "content": "Hi"}],
+                },
+            )
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data.get("tokenwise_trace") is None
+
+
+class TestRiskGateProxy:
+    def test_risk_gate_422(self, client):
+        """Risk gate should return 422 when blocking a request."""
+        import os
+
+        from tokenwise.config import reset_settings
+
+        with patch.dict(os.environ, {"TOKENWISE_RISK_GATE_ENABLED": "true"}):
+            reset_settings()
+            resp = client.post(
+                "/v1/chat/completions",
+                json={
+                    "model": "auto",
+                    "messages": [
+                        {"role": "user", "content": "delete the production database"}
+                    ],
+                },
+            )
+            assert resp.status_code == 422
+            assert "risk gate" in resp.json()["detail"].lower()
+
+
 class TestFailedModels:
     def test_add_and_contains(self):
         fm = _FailedModels()

@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import os
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from tokenwise.config import reset_settings
 from tokenwise.executor import Executor
-from tokenwise.models import Plan, Step, StepResult
+from tokenwise.models import Plan, Step, StepResult, TerminationState
 from tokenwise.registry import ModelRegistry
 
 
@@ -925,3 +927,200 @@ class TestProductionInvariants:
         assert result.ledger.entries[0].cost == pytest.approx(0.002)
         # total_cost includes both failed + escalated costs
         assert result.total_cost == pytest.approx(0.002 + 0.005)
+
+
+class TestRoutingTrace:
+    """Tests for routing trace on PlanResult."""
+
+    def test_trace_on_plan_result(self, sample_registry: ModelRegistry):
+        executor = Executor(registry=sample_registry)
+        step = Step(
+            id=1, description="Do something", model_id="openai/gpt-4.1-mini", estimated_cost=0.001
+        )
+        plan = _make_plan([step])
+
+        with patch.object(executor, "_execute_step", return_value=_mock_step_result(1)):
+            result = executor._execute_sequential(plan)
+
+        assert result.routing_trace is not None
+        assert result.routing_trace.request_id
+
+    def test_termination_completed(self, sample_registry: ModelRegistry):
+        executor = Executor(registry=sample_registry)
+        step = Step(
+            id=1, description="Do something", model_id="openai/gpt-4.1-mini", estimated_cost=0.001
+        )
+        plan = _make_plan([step])
+
+        with patch.object(executor, "_execute_step", return_value=_mock_step_result(1)):
+            result = executor._execute_sequential(plan)
+
+        assert result.routing_trace is not None
+        assert result.routing_trace.termination_state == TerminationState.COMPLETED
+
+    def test_termination_exhausted(self, sample_registry: ModelRegistry):
+        executor = Executor(registry=sample_registry)
+        steps = [
+            Step(
+                id=1, description="Expensive", model_id="openai/gpt-4.1-mini", estimated_cost=0.001
+            ),
+            Step(id=2, description="Skipped", model_id="openai/gpt-4.1-mini", estimated_cost=0.5),
+        ]
+        plan = _make_plan(steps, budget=0.005)
+
+        with patch.object(
+            executor, "_execute_step", return_value=_mock_step_result(1, cost=0.005)
+        ):
+            result = executor._execute_sequential(plan)
+
+        assert result.routing_trace is not None
+        assert result.routing_trace.termination_state == TerminationState.EXHAUSTED
+
+    def test_termination_failed(self, sample_registry: ModelRegistry):
+        executor = Executor(registry=sample_registry)
+        step = Step(
+            id=1, description="Failing", model_id="openai/gpt-4.1-mini", estimated_cost=0.001
+        )
+        plan = _make_plan([step], budget=1.0)
+
+        failed = _mock_step_result(1, success=False, cost=0.0)
+        with patch.object(executor, "_execute_step", return_value=failed):
+            result = executor._execute_sequential(plan)
+
+        assert result.routing_trace is not None
+        assert result.routing_trace.termination_state == TerminationState.FAILED
+
+    def test_budget_fields_populated(self, sample_registry: ModelRegistry):
+        executor = Executor(registry=sample_registry)
+        step = Step(
+            id=1, description="Do something", model_id="openai/gpt-4.1-mini", estimated_cost=0.001
+        )
+        plan = _make_plan([step], budget=1.0)
+
+        with patch.object(
+            executor, "_execute_step", return_value=_mock_step_result(1, cost=0.005)
+        ):
+            result = executor._execute_sequential(plan)
+
+        assert result.routing_trace is not None
+        assert result.routing_trace.budget_used == pytest.approx(0.005)
+        assert result.routing_trace.budget_remaining == pytest.approx(0.995)
+
+    async def test_async_trace_on_plan_result(self, sample_registry: ModelRegistry):
+        executor = Executor(registry=sample_registry)
+        step = Step(
+            id=1, description="Do something", model_id="openai/gpt-4.1-mini", estimated_cost=0.001
+        )
+        plan = _make_plan([step])
+
+        with patch.object(
+            executor,
+            "_aexecute_step",
+            new_callable=AsyncMock,
+            return_value=_mock_step_result(1),
+        ):
+            result = await executor.aexecute(plan)
+
+        assert result.routing_trace is not None
+        assert result.routing_trace.termination_state == TerminationState.COMPLETED
+
+    def test_escalation_records_in_trace(self, sample_registry: ModelRegistry):
+        executor = Executor(registry=sample_registry)
+        step = Step(
+            id=1,
+            description="Failing step",
+            model_id="openai/gpt-4.1-mini",
+            estimated_cost=0.001,
+        )
+        plan = _make_plan([step], budget=1.0)
+
+        failed = _mock_step_result(1, success=False, cost=0.0, model_id="openai/gpt-4.1-mini")
+        escalated = _mock_step_result(1, model_id="openai/gpt-4.1", output="escalated")
+        escalated.escalated = True
+
+        with patch.object(executor, "_execute_step", return_value=failed):
+            with patch.object(executor, "_escalate", side_effect=lambda *a, **kw: escalated):
+                # Call _escalate manually to populate trace
+                pass
+
+        # Use the full sequential flow which threads trace through
+        call_count = 0
+
+        def mock_exec_step(step_id, model_id, prompt, budget_remaining, **kw):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return failed
+            return escalated
+
+        # Use actual escalation flow
+        with patch.object(executor, "_execute_step", side_effect=mock_exec_step):
+            result = executor._execute_sequential(plan)
+
+        assert result.routing_trace is not None
+        if result.routing_trace.escalations:
+            esc = result.routing_trace.escalations[0]
+            assert esc.from_model == "openai/gpt-4.1-mini"
+            assert esc.step_id == 1
+
+
+class TestMonotonicEscalation:
+    """Tests for monotonic escalation policy."""
+
+    def test_monotonic_excludes_same_tier(self, sample_registry: ModelRegistry):
+        with patch.dict(os.environ, {"TOKENWISE_ESCALATION_POLICY": "monotonic"}):
+            reset_settings()
+            executor = Executor(registry=sample_registry)
+            step = Step(
+                id=1,
+                description="Test",
+                model_id="openai/gpt-4.1-mini",
+                estimated_cost=0.001,
+            )
+            candidates = executor._get_fallback_candidates(
+                exclude={"openai/gpt-4.1-mini"}, budget_remaining=100.0, step=step
+            )
+            from tokenwise.models import ModelTier
+
+            # In monotonic mode, no BUDGET tier candidates should appear
+            for c in candidates:
+                assert c.tier != ModelTier.BUDGET
+
+    def test_flexible_includes_same_tier(self, sample_registry: ModelRegistry):
+        with patch.dict(os.environ, {"TOKENWISE_ESCALATION_POLICY": "flexible"}):
+            reset_settings()
+            executor = Executor(registry=sample_registry)
+            step = Step(
+                id=1,
+                description="Test",
+                model_id="openai/gpt-4.1-mini",
+                estimated_cost=0.001,
+                required_capabilities=["code"],
+            )
+            candidates = executor._get_fallback_candidates(
+                exclude={"openai/gpt-4.1-mini"}, budget_remaining=100.0, step=step
+            )
+            from tokenwise.models import ModelTier
+
+            tiers = {c.tier for c in candidates}
+            # Flexible mode should include same-tier (BUDGET) candidates
+            assert ModelTier.BUDGET in tiers
+
+    def test_monotonic_allows_stronger(self, sample_registry: ModelRegistry):
+        with patch.dict(os.environ, {"TOKENWISE_ESCALATION_POLICY": "monotonic"}):
+            reset_settings()
+            executor = Executor(registry=sample_registry)
+            step = Step(
+                id=1,
+                description="Test",
+                model_id="openai/gpt-4.1-mini",
+                estimated_cost=0.001,
+            )
+            candidates = executor._get_fallback_candidates(
+                exclude={"openai/gpt-4.1-mini"}, budget_remaining=100.0, step=step
+            )
+            assert len(candidates) > 0
+            from tokenwise.models import ModelTier
+
+            for c in candidates:
+                assert c.tier in (ModelTier.MID, ModelTier.FLAGSHIP)

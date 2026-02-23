@@ -7,7 +7,13 @@ from unittest.mock import patch
 from typer.testing import CliRunner
 
 from tokenwise.cli import app
-from tokenwise.models import ModelInfo, ModelTier
+from tokenwise.models import (
+    ModelInfo,
+    ModelTier,
+    RiskGateBlockedError,
+    RoutingTrace,
+    TerminationState,
+)
 
 runner = CliRunner()
 
@@ -46,14 +52,27 @@ class TestCLI:
             capabilities=["code"],
             tier=ModelTier.BUDGET,
         )
+        mock_trace = RoutingTrace(initial_model="test/cheap-model", final_model="test/cheap-model")
 
         with patch("tokenwise.cli.Router") as mock_router_cls:
             instance = mock_router_cls.return_value
-            instance.route.return_value = mock_model
+            instance.route_with_trace.return_value = (mock_model, mock_trace)
 
             result = runner.invoke(app, ["route", "Write a haiku"])
             assert result.exit_code == 0
             assert "test/cheap-model" in result.output
+
+    def test_route_risk_gate_blocked(self):
+        with patch("tokenwise.cli.Router") as mock_router_cls:
+            instance = mock_router_cls.return_value
+            trace = RoutingTrace(termination_state=TerminationState.NO_GO)
+            instance.route_with_trace.side_effect = RiskGateBlockedError(
+                reason="irreversible operation detected", trace=trace
+            )
+
+            result = runner.invoke(app, ["route", "delete the production database"])
+            assert result.exit_code == 1
+            assert "risk gate" in result.output.lower()
 
     def test_plan_with_mock_planner(self):
         from tokenwise.models import Plan, Step

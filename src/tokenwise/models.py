@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from enum import Enum
 from typing import Any
+from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -22,6 +23,41 @@ class ModelTier(str, Enum):
     FLAGSHIP = "flagship"
     MID = "mid"
     BUDGET = "budget"
+
+
+class EscalationPolicy(str, Enum):
+    """How the executor handles fallback model selection."""
+
+    FLEXIBLE = "flexible"
+    MONOTONIC = "monotonic"
+
+
+class TraceLevel(str, Enum):
+    """Verbosity level for routing traces."""
+
+    BASIC = "basic"
+    VERBOSE = "verbose"
+
+
+class TerminationState(str, Enum):
+    """Final state of a routing/execution session."""
+
+    COMPLETED = "completed"
+    EXHAUSTED = "exhausted"
+    ABORTED = "aborted"
+    FAILED = "failed"
+    NO_GO = "no_go"
+
+
+class EscalationReasonCode(str, Enum):
+    """Reason for escalating to a different model."""
+
+    COMPLEXITY_THRESHOLD = "complexity_threshold"
+    CAPABILITY_MISMATCH = "capability_mismatch"
+    MODEL_ERROR = "model_error"
+    BUDGET_EXHAUSTED = "budget_exhausted"
+    NO_GO = "no_go"
+    MANUAL_OVERRIDE = "manual_override"
 
 
 class ModelInfo(BaseModel):
@@ -123,6 +159,44 @@ class CostLedger(BaseModel):
         )
 
 
+class EscalationRecord(BaseModel):
+    """A single escalation event during execution."""
+
+    from_model: str
+    from_tier: ModelTier
+    to_model: str
+    to_tier: ModelTier
+    reason_code: EscalationReasonCode
+    step_id: int | None = None
+    trigger_score: float | None = None
+    threshold_value: float | None = None
+
+
+class RoutingTrace(BaseModel):
+    """Structured trace of routing decisions."""
+
+    request_id: str = Field(default_factory=lambda: uuid4().hex[:12])
+    initial_model: str = ""
+    initial_tier: ModelTier = ModelTier.BUDGET
+    escalation_policy: EscalationPolicy = EscalationPolicy.FLEXIBLE
+    escalations: list[EscalationRecord] = Field(default_factory=list)
+    final_model: str = ""
+    final_tier: ModelTier = ModelTier.BUDGET
+    termination_state: TerminationState = TerminationState.COMPLETED
+    budget_used: float = 0.0
+    budget_remaining: float = 0.0
+    trace_level: TraceLevel = TraceLevel.BASIC
+
+
+class RiskGateBlockedError(Exception):
+    """Raised when the risk gate blocks a query."""
+
+    def __init__(self, reason: str, trace: RoutingTrace | None = None) -> None:
+        self.reason = reason
+        self.trace = trace
+        super().__init__(reason)
+
+
 class StepResult(BaseModel):
     """Result of executing a single step."""
 
@@ -140,6 +214,7 @@ class StepResult(BaseModel):
     escalated: bool = Field(
         default=False, description="Whether this step was retried on a stronger model"
     )
+    routing_trace: RoutingTrace | None = None
 
 
 class PlanResult(BaseModel):
@@ -156,6 +231,7 @@ class PlanResult(BaseModel):
     success: bool = True
     final_output: str = ""
     ledger: CostLedger = Field(default_factory=CostLedger)
+    routing_trace: RoutingTrace | None = None
 
     @property
     def budget_remaining(self) -> float:
@@ -211,6 +287,7 @@ class ChatCompletionResponse(BaseModel):
     model: str = ""
     choices: list[ChatCompletionChoice] = Field(default_factory=list)
     usage: Usage = Field(default_factory=Usage)
+    tokenwise_trace: dict[str, Any] | None = None
 
 
 class DeltaMessage(BaseModel):
