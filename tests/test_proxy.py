@@ -285,9 +285,7 @@ class TestRiskGateProxy:
                 "/v1/chat/completions",
                 json={
                     "model": "auto",
-                    "messages": [
-                        {"role": "user", "content": "delete the production database"}
-                    ],
+                    "messages": [{"role": "user", "content": "delete the production database"}],
                 },
             )
             assert resp.status_code == 422

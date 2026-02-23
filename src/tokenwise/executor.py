@@ -156,7 +156,11 @@ class Executor:
             has_budget = result.total_cost + step_result.actual_cost < plan.budget
             if not step_result.success and has_budget:
                 escalated = self._escalate(
-                    step, prompt, remaining - step_result.actual_cost, result.ledger, trace,
+                    step,
+                    prompt,
+                    remaining - step_result.actual_cost,
+                    result.ledger,
+                    trace,
                     self._classify_escalation_reason(step_result),
                 )
                 if escalated is not None:
@@ -358,7 +362,11 @@ class Executor:
         if not step_result.success and has_budget:
             failed_cost = step_result.actual_cost
             escalated = await self._aescalate(
-                step, prompt, budget_remaining - failed_cost, ledger, trace,
+                step,
+                prompt,
+                budget_remaining - failed_cost,
+                ledger,
+                trace,
                 self._classify_escalation_reason(step_result),
             )
             if escalated is not None:
@@ -463,14 +471,16 @@ class Executor:
             tried.add(model.id)
 
             if trace is not None:
-                trace.escalations.append(EscalationRecord(
-                    from_model=step.model_id,
-                    from_tier=failed_tier,
-                    to_model=model.id,
-                    to_tier=model.tier,
-                    reason_code=reason_code,
-                    step_id=step.id,
-                ))
+                trace.escalations.append(
+                    EscalationRecord(
+                        from_model=step.model_id,
+                        from_tier=failed_tier,
+                        to_model=model.id,
+                        to_tier=model.tier,
+                        reason_code=reason_code,
+                        step_id=step.id,
+                    )
+                )
 
             result = await self._aexecute_step(
                 step.id,
@@ -756,14 +766,16 @@ class Executor:
             tried.add(model.id)
 
             if trace is not None:
-                trace.escalations.append(EscalationRecord(
-                    from_model=step.model_id,
-                    from_tier=failed_tier,
-                    to_model=model.id,
-                    to_tier=model.tier,
-                    reason_code=reason_code,
-                    step_id=step.id,
-                ))
+                trace.escalations.append(
+                    EscalationRecord(
+                        from_model=step.model_id,
+                        from_tier=failed_tier,
+                        to_model=model.id,
+                        to_tier=model.tier,
+                        reason_code=reason_code,
+                        step_id=step.id,
+                    )
+                )
 
             result = self._execute_step(
                 step.id,

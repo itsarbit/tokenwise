@@ -968,9 +968,7 @@ class TestRoutingTrace:
         ]
         plan = _make_plan(steps, budget=0.005)
 
-        with patch.object(
-            executor, "_execute_step", return_value=_mock_step_result(1, cost=0.005)
-        ):
+        with patch.object(executor, "_execute_step", return_value=_mock_step_result(1, cost=0.005)):
             result = executor._execute_sequential(plan)
 
         assert result.routing_trace is not None
@@ -997,9 +995,7 @@ class TestRoutingTrace:
         )
         plan = _make_plan([step], budget=1.0)
 
-        with patch.object(
-            executor, "_execute_step", return_value=_mock_step_result(1, cost=0.005)
-        ):
+        with patch.object(executor, "_execute_step", return_value=_mock_step_result(1, cost=0.005)):
             result = executor._execute_sequential(plan)
 
         assert result.routing_trace is not None

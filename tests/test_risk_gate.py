@@ -71,7 +71,8 @@ class TestAmbiguityThreshold:
         config = RiskGateConfig(enabled=True, ambiguity_threshold=0.9)
         result = evaluate_risk(
             "Write a Python function that takes a list of integers and returns "
-            "the sum of all even numbers", config
+            "the sum of all even numbers",
+            config,
         )
         assert not result.blocked
 
