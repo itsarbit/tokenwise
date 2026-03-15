@@ -45,6 +45,9 @@ _TOKEN_ESTIMATES: dict[str, tuple[int, int]] = {
     "complex": (2000, 1000),
 }
 
+# Simple in-memory route cache: key = (query, strategy, budget) -> model_id
+_route_cache: dict[tuple, str] = {}
+
 
 def _detect_capabilities(query: str) -> list[str]:
     """Detect likely required capabilities from query text."""
@@ -127,6 +130,15 @@ class Router:
         if isinstance(strategy, str):
             strategy = RoutingStrategy(strategy)
 
+        # Check cache first
+        cache_key = (query, str(strategy), budget)
+        if cache_key in _route_cache:
+            cached_id = _route_cache[cache_key]
+            models = self.registry.find_models()
+            for m in models:
+                if m.id == cached_id:
+                    return m
+
         # ── Stage 1: Scenario detection ──────────────────────────────
         primary_cap, complexity = self._detect_scenario(query, required_capability)
 
@@ -156,11 +168,15 @@ class Router:
 
         # Apply strategy preference
         if strategy == RoutingStrategy.CHEAPEST:
-            return self._route_cheapest(candidates)
+            result = self._route_cheapest(candidates)
         elif strategy == RoutingStrategy.BEST_QUALITY:
-            return self._route_best_quality(candidates)
+            result = self._route_best_quality(candidates)
         else:  # balanced
-            return self._route_balanced(candidates, complexity)
+            result = self._route_balanced(candidates, complexity)
+
+        # Store in cache
+        _route_cache[cache_key] = result.id
+        return result
 
     def route_with_trace(
         self,
